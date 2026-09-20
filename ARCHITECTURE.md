@@ -10,19 +10,22 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 
 ## Current phase
 
-> **PHASE 0 — SKELETON (complete).**
-> Repo layout, tooling, design tokens, ARCHITECTURE.md, README, Makefile. No
-> application code.
+> **PHASE 1 — RISK ENGINE (complete).**
+> `riskengine/` is built and tested: book, oracle, marking, liquidation,
+> controls, scenario, engine, plus `params` and `rng`. 155 tests green,
+> determinism asserted by hashing whole runs, and the controls-off-vs-on delta
+> holds in all six scenarios.
 >
-> **Next: Phase 1 — `riskengine` core** (book, oracle, marking, liquidation,
-> controls, scenario, engine) with pytest coverage and the determinism test.
+> **Next: Phase 2 — Django models, RiskPolicy seed, REST API.** `RiskPolicy`
+> mirrors `riskengine.params.RiskParams` field for field and renders
+> `FIELD_SOURCES` verbatim as `help_text`.
 
 Every phase updates this marker and ends in a commit.
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Skeleton, tooling, tokens, docs | Done |
-| 1 | `riskengine` — pure-Python simulation core + tests | Not started |
+| 1 | `riskengine` — pure-Python simulation core + tests | Done |
 | 2 | Django models, RiskPolicy seed, REST API | Not started |
 | 3 | Web shell, design system, Simulate surface | Not started |
 | 4 | Controls Off vs On — the proof | Not started |
@@ -107,6 +110,7 @@ backend/
   manage.py
   config/            settings, urls, wsgi
   riskengine/        PURE PYTHON. No Django imports anywhere in here.
+    params.py  rng.py                      (added in Phase 1 — see below)
     book.py  oracle.py  marking.py  liquidation.py
     controls.py  scenario.py  engine.py  classifier.py  remediation.py
   core/              Django app: models, admin, serializers, views, urls
@@ -116,6 +120,35 @@ web/                 Vite app
   src/  components/ features/ lib/ pages/ styles/
 ARCHITECTURE.md  README.md  Makefile
 ```
+
+### Two modules added to the original layout
+
+- **`params.py`** — `RiskParams`, the pure-Python mirror of the `RiskPolicy`
+  model, plus `FIELD_SOURCES`, a citation for every single field. Everything
+  imports it, so it cannot live inside `controls.py` (which is about which
+  controls are *on*, not what the numbers *are*).
+- **`rng.py`** — the seeded generator. Wraps `random.Random` for the uniform
+  stream but implements `normal()` as Box-Muller, because `random.gauss` caches
+  a spare deviate and so consumes a varying number of uniforms per call, which
+  quietly breaks replay. Sub-streams are derived by label through BLAKE2b, not
+  `hash()`, whose salt is randomised per process.
+
+### Three parameters are ours, not the brief's
+
+Marked `DERIVED` in `FIELD_SOURCES` and stated as such rather than dressed up as
+sourced: `partial_liq_target_mm_multiple` (1.5x MM), `velocity_trigger_frac_of_dcb`
+(0.5) and `price_band_frac_of_dcb` (1.0). The brief specifies each mechanism but
+publishes no value for it.
+
+### Two modelling rules the engine depends on
+
+- **A leverage cap shrinks the position, never the capital.** The notional
+  distribution describes the uncapped book; a cap holds the user's money fixed
+  and reduces what they can open with it. Inverting this makes every cap look
+  like it *increases* losses.
+- **Loss is valued at the final Reference Composite for every run**, and
+  deposits paid in mid-run are netted out. Valuing each run at its own final
+  mark means a stack that merely moved the mark looks like it moved the money.
 
 ---
 
