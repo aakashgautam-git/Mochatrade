@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { ChartLegend, PriceChart } from "./components/PriceChart";
 import { StatTile } from "./components/StatTile";
 import { fetchComparison, fetchScenarios, rupees } from "./lib/api";
 import type { Comparison, ScenarioRow } from "./lib/types";
@@ -29,6 +30,8 @@ export function App() {
       live = false;
     };
   }, [slug]);
+
+  const domain = sharedDomain(data);
 
   return (
     <div className="min-h-screen">
@@ -123,6 +126,31 @@ export function App() {
               />
             </section>
 
+            <section className="mt-10">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                <h2 className="text-sm uppercase tracking-[0.14em] text-text-faint">
+                  Price formation, shared clock
+                </h2>
+                <ChartLegend />
+              </div>
+              <div className="grid grid-cols-1 gap-4">
+                <PriceChart
+                  title="Unprotected"
+                  caption={`trough ${data.off.trough_pct.toFixed(1)}%`}
+                  data={data.off.series}
+                  domain={domain}
+                  accent="#D96A6A"
+                />
+                <PriceChart
+                  title="Protected"
+                  caption={`trough ${data.on.trough_pct.toFixed(1)}%`}
+                  data={data.on.series}
+                  domain={domain}
+                  accent="#5FA37A"
+                />
+              </div>
+            </section>
+
             <p className="mt-8 max-w-4xl text-xs leading-relaxed text-text-faint">
               {data.assumed_scale_note}
             </p>
@@ -135,6 +163,19 @@ export function App() {
       </main>
     </div>
   );
+}
+
+/** Both panels share one y-domain, or "protected" would merely look rescaled. */
+function sharedDomain(data: Comparison | null): [number, number] {
+  if (!data) return [0, 1];
+  const values = [...data.off.series, ...data.on.series].flatMap((p) =>
+    [p.oracle, p.mark, p.ltp].filter((v): v is number => v !== null),
+  );
+  if (values.length === 0) return [0, 1];
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const pad = (hi - lo) * 0.06 || hi * 0.01;
+  return [lo - pad, hi + pad];
 }
 
 function Verdict({ data }: { data: Comparison }) {
