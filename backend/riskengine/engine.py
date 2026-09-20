@@ -668,13 +668,19 @@ class Engine:
 
         This is NOT "what if nobody had ever been liquidated". An account that
         breaches maintenance margin even against the honest price would have
-        been liquidated anyway, and restoring it would hand it a windfall --
-        which is the moral hazard the published policy explicitly excludes by
-        carving out "customers who experienced trading losses under normal
-        circumstances". Getting this wrong inverts the sign of the whole
-        measure: in a market that ends lower, holding an unliquidated position
-        to the close loses more than being closed early, so a naive
-        never-liquidated counterfactual reports the cascade as having HELPED.
+        been liquidated anyway, and restoring it would hand it a windfall.
+
+        That exclusion is not our invention, which matters when a judge asks
+        whether compensation is just moral hazard. OKX's January 2019 notice on
+        its ETH futures index error is the template: it named the exact error
+        windows, set a crediting deadline, did not roll anything back, and
+        explicitly excluded "customers who experienced trading losses under
+        normal circumstances". Compensate the defect, not the market.
+
+        Getting this wrong inverts the sign of the whole measure: in a market
+        that ends lower, holding an unliquidated position to the close loses
+        more than being closed early, so a naive never-liquidated counterfactual
+        reports the cascade as having HELPED.
 
         So: an account that survives at the honest price is restored and marked
         at the final Reference Composite. An account that does not survive it is

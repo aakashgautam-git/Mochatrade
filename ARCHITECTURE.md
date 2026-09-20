@@ -10,27 +10,36 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 
 ## Current phase
 
-> **PHASE 1 — RISK ENGINE (complete).**
-> `riskengine/` is built and tested: book, oracle, marking, liquidation,
-> controls, scenario, engine, plus `params` and `rng`. 155 tests green,
-> determinism asserted by hashing whole runs, and the controls-off-vs-on delta
-> holds in all six scenarios.
+> **PHASE 2 — DJANGO MODELS + ADMIN (complete).** Ten models, migrations, a
+> demo-ready admin, and `seed_policy`. `RiskPolicy` is a generated mirror of
+> `riskengine.params.RiskParams`: defaults and `help_text` both come from the
+> dataclass and `FIELD_SOURCES`, and `to_params()` is the only route by which
+> the engine ever receives configuration. 214 tests green.
 >
-> **Next: Phase 2 — Django models, RiskPolicy seed, REST API.** `RiskPolicy`
-> mirrors `riskengine.params.RiskParams` field for field and renders
-> `FIELD_SOURCES` verbatim as `help_text`.
+> **NEXT: PHASE 4 — REST API.** Await instructions before starting.
 
-Every phase updates this marker and ends in a commit.
+Phases are numbered by the project plan, not by build order: the risk engine
+(3) was built before the Django layer (2) because everything downstream needs a
+trustworthy engine more than it needs a database.
 
-| Phase | Scope | Status |
+| # | Phase | Status |
 |---|---|---|
-| 0 | Skeleton, tooling, tokens, docs | Done |
-| 1 | `riskengine` — pure-Python simulation core + tests | Done |
-| 2 | Django models, RiskPolicy seed, REST API | Not started |
-| 3 | Web shell, design system, Simulate surface | Not started |
-| 4 | Controls Off vs On — the proof | Not started |
-| 5 | War room — the live 60-minute playbook | Not started |
-| 6 | Classify, remediate, incident report | Not started |
+| 0 | Context — the domain research brief | Done |
+| 1 | Scaffold — repo, tooling, design tokens, docs | Done |
+| 2 | Django models + admin | Done |
+| 3 | Risk engine — pure-Python core + tests | Done |
+| 4 | REST API | **Next** |
+| 5 | Design system | Not started |
+| 6 | Simulator surface | Not started |
+| 7 | War room | Not started |
+| 8 | Forensics | Not started |
+| 9 | Remediation — claims, make-whole, pro-rata cap overflow | Not started |
+| 10 | Comms | Not started |
+| 11 | Incident report | Not started |
+| 12 | Seed data + polish | Not started |
+
+Every phase updates this marker and ends in a commit. Do not start the next
+phase without being asked.
 
 ---
 
@@ -149,6 +158,23 @@ publishes no value for it.
 - **Loss is valued at the final Reference Composite for every run**, and
   deposits paid in mid-run are netted out. Valuing each run at its own final
   mark means a stack that merely moved the mark looks like it moved the money.
+
+### The anti-drift guard
+
+`RiskPolicy` and `RiskParams` must stay in exact 1:1 correspondence.
+`tests/test_policy_mirror.py` fails the build if a field exists in one and not
+the other, if a model default is retyped instead of read from the dataclass, if
+any `help_text` diverges from its citation, or if `to_params()` stops
+round-tripping. Adding a risk parameter means adding it to `RiskParams` and
+`FIELD_SOURCES` first; the model follows.
+
+The two ladders — the five-rung maintenance-margin table and the per-tier
+NRR/DCB table — are related rows (`PolicyMarginTier`, `PolicyInstrumentTier`)
+edited as admin inlines, not JSON blobs. They are the parameters most likely to
+be changed live in front of a judge.
+
+`IncidentAction` is append-only and this is enforced, not merely intended: add,
+change and delete all return 403 from the admin.
 
 ---
 

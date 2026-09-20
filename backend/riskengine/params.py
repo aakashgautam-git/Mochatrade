@@ -109,6 +109,7 @@ class RiskParams:
     price_band_frac_of_dcb: float = 1.0  # DERIVED
 
     # --- Oracle and marking ------------------------------------------------
+    mark_max_deviation_bps: float = 50.0
     outlier_clamp_pct: float = 0.03
     majors_outlier_clamp_pct: float = 0.01
     staleness_seconds: int = 300
@@ -308,6 +309,11 @@ FIELD_SOURCES: Final[dict[str, str]] = {
         "DCB variant, giving one replicable figure a participant can compute. A "
         "pre-trade band is what would have stopped Binance.US printing BTC at "
         "$8,200 (-87%) on 21 Oct 2021 from one client's algo bug. Brief 3, 4.2."
+    ),
+    "mark_max_deviation_bps": (
+        "Mark-to-Reference-Composite divergence that trips the auto-pager at "
+        "T+0..2. The playbook's first detection trigger, alongside liquidation "
+        "rate per minute, API 5xx rate and ticket rate. Research brief 6."
     ),
     "outlier_clamp_pct": (
         "A source deviating more than this from the median is capped at "
