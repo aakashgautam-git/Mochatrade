@@ -1,0 +1,85 @@
+/* MochaTrade Crisis Command — design tokens.
+ *
+ * Aesthetic: calm under pressure. A Bloomberg terminal redesigned by someone
+ * with taste. Dark by default, because this is a war room. Warm charcoal, not
+ * blue-black: it should feel like the mocha in MochaTrade.
+ *
+ * No neon. No purple-blue gradients. No glassmorphism. No glow. No emoji.
+ *
+ * These are the only colour values in the project. Components reference the
+ * Tailwind names wired to them in tailwind.config.js, never a raw hex.
+ */
+
+:root {
+  /* Surfaces */
+  --bg: #14110f;
+  --surface: #1c1917;
+  --surface-2: #262220;
+  --line: rgba(255, 255, 255, 0.08);
+
+  /* Text */
+  --text: #f2ede7;
+  --text-dim: #a79e96;
+  --text-faint: #6b625b;
+
+  /* Accent — mocha. Primary actions and key data only. */
+  --accent: #c98a5e;
+  --accent-soft: rgba(201, 138, 94, 0.12);
+
+  /* Semantic. Every one of these is paired with a label or a shape in the UI,
+     never colour alone. */
+  --pos: #5fa37a;
+  --neg: #d96a6a;
+  --warn: #d9a441;
+  --halt: #8b5cf6; /* halt / intervention states ONLY */
+
+  /* Type */
+  --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* 8px spacing grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 64px;
+
+  /* Radii */
+  --radius-card: 10px;
+  --radius-control: 8px;
+  --radius-chip: 6px;
+
+  /* Motion. 150-200ms ease-out only. No spring, no bounce. */
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Light theme. Report and Playbook pages only — never the war room. */
+:root[data-theme="light"] {
+  --bg: #faf7f4;
+  --surface: #ffffff;
+  --surface-2: #f2ede7;
+  --line: rgba(28, 25, 23, 0.1);
+
+  --text: #1c1917;
+  --text-dim: #5c534c;
+  --text-faint: #8a807a;
+
+  --accent: #a96c42;
+  --accent-soft: rgba(169, 108, 66, 0.1);
+
+  --pos: #3f7d58;
+  --neg: #b84a4a;
+  --warn: #a8761f;
+  --halt: #6d3fc4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+  }
+}
