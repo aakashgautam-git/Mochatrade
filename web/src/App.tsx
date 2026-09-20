@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { HowThisWorks } from "./components/HowThisWorks";
 import { ChartLegend, PriceChart } from "./components/PriceChart";
 import { StatTile } from "./components/StatTile";
 import { fetchComparison, fetchScenarios, rupees } from "./lib/api";
@@ -150,6 +151,8 @@ export function App() {
                 />
               </div>
             </section>
+
+            <HowThisWorks />
 
             <p className="mt-8 max-w-4xl text-xs leading-relaxed text-text-faint">
               {data.assumed_scale_note}
