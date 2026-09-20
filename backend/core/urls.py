@@ -1,5 +1,11 @@
-"""Routes under /api/. Populated from Phase 2 onwards."""
+"""Routes under /api/."""
+from django.urls import path
+
+from . import views
 
 app_name = "core"
 
-urlpatterns: list = []
+urlpatterns = [
+    path("scenarios/", views.scenarios, name="scenarios"),
+    path("compare/<slug:slug>/", views.compare, name="compare"),
+]
