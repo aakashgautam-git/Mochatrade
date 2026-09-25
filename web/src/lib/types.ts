@@ -162,6 +162,24 @@ export interface SourceObservation {
   excluded_reason: string;
 }
 
+/** A pause reopening through a call auction: one clearing price, max matched
+ * volume, collared around the Reference Composite. Negative imbalance means
+ * unmatched sellers carried into continuous trading. */
+export interface AuctionRecord {
+  tick: number;
+  reason: string;
+  reference: number;
+  collar_lo: number;
+  collar_hi: number;
+  clearing_price: number;
+  matched_qty: number;
+  matched_notional: number;
+  imbalance_qty: number;
+  liquidations_queued: number;
+  liquidations_absorbed: number;
+  liquidation_qty_carried: number;
+}
+
 export interface Tick {
   tick: number;
   t_seconds: number;
@@ -193,6 +211,7 @@ export interface Tick {
   unnecessary_liquidations: number;
   accounts_open: number;
   aggregate_equity: number;
+  auction: AuctionRecord | null;
   sources: SourceObservation[];
 }
 
@@ -211,6 +230,8 @@ export interface RunSummary {
   min_depth_pct_of_baseline: number;
   saved_by_grace: number;
   upi_credits_issued: number;
+  auctions: number;
+  auction_liquidations_absorbed: number;
   open_interest_inr: MoneyString;
   liquidated_notional_inr: MoneyString;
   unnecessary_notional_inr: MoneyString;

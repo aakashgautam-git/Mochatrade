@@ -210,6 +210,28 @@ the run cache key, so adding a frame field invalidates stored runs instead of
 serving them without it. Responses are gzipped; a full comparison is ~280 KB on
 the wire.
 
+### Pauses, cooldown and the reopening auction (Phase 5.5)
+
+- **Velocity cooldown and escalation.** After a velocity pause the layer may not
+  fire for `velocity_cooldown_seconds`; if the move is still too fast in the
+  first window after that, the next pause escalates (5s, 20s, 80s, capped at the
+  breaker's 120s). Before this the protected macro run paused 56 times and the
+  mark swung 83 times.
+- **Every pause reopens through a call auction** (`riskengine/auction.py`).
+  Queued liquidations become market orders against resting depth inside a
+  collar -- the pre-trade price band around the Reference Composite -- and clear
+  at one price: max volume, then min imbalance, then nearest the reference.
+  What cannot match carries into continuous trading, which opens at that price.
+- **The auction is throttled.** Unthrottled, the whole queue entered at once
+  and max-volume uncrossing walked it to the collar floor, printing a 95-390 bps
+  wick in one trade. The published participation cap applies to the auction's
+  intake exactly as it does to continuous trading.
+- **Known tension, not yet resolved:** the 20% TWAP participation moves price
+  about 88 bps/s, while the velocity layer trips at about 40 bps/s. The engine's
+  own permitted pace trips its own breaker, which is the root cause of the
+  stutter. The cooldown and auction contain it; recalibrating the throttle
+  would remove it. That is a policy decision, recorded in the Phase 5.5 report.
+
 ### Live engines
 
 War-room incidents step a live `Engine` held in `runner._LIVE`, keyed by

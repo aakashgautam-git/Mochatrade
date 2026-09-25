@@ -46,6 +46,7 @@ import math
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 
+from .auction import AuctionRecord, allocate, uncross
 from .book import Book
 from .params import RiskParams
 
@@ -209,6 +210,10 @@ class LiquidationEvent:
     yes, this liquidation should not have happened, and that is the number the
     whole proof page is built on."""
 
+    via_auction: bool = False
+    """Filled in a reopening call auction at the single clearing price, rather
+    than by walking the book in continuous trading."""
+
 
 @dataclass(slots=True)
 class LiquidationOutcome:
@@ -371,23 +376,7 @@ class LiquidationEngine:
                 outcome.throttled_accounts += 1
                 continue
 
-            equity = account.equity(mark)
-            mm = account.mm_required(mark, self.params)
-            below_backstop = equity < self.params.backstop_threshold(mm)
-
-            if two_stage_enabled and not below_backstop:
-                stage = LiquidationStage.PARTIAL
-                close_qty = self._partial_close_qty(account, mark, mm)
-            elif two_stage_enabled:
-                stage = LiquidationStage.BACKSTOP
-                close_qty = account.qty
-            else:
-                # Control off: no tiering, no two-stage path. The whole position
-                # goes to market the instant maintenance margin breaks.
-                stage = LiquidationStage.MARKET
-                close_qty = account.qty
-
-            close_qty = min(close_qty, account.qty)
+            equity, mm, stage, close_qty = self._plan(account, mark, two_stage_enabled)
             if close_qty <= 0.0:
                 continue
 
@@ -419,61 +408,19 @@ class LiquidationEngine:
             budget -= executed_notional
             outcome.unfilled_notional += fill.unfilled_notional
 
-            self._book_pnl(account, executed_qty, fill.avg_price)
-            account.qty -= executed_qty
-            account.liquidated_qty += executed_qty
-            account.liquidation_value += executed_notional
-            account.liquidated_tick = tick
-
-            fee = 0.0
-            shortfall = 0.0
-            if stage is LiquidationStage.BACKSTOP:
-                # The punitive path: maintenance margin is forfeited.
-                fee = executed_notional * self.params.clearance_fee_pct
-                account.fees_paid += fee
-                account.realised_pnl -= fee
-            elif stage is LiquidationStage.MARKET:
-                fee = executed_notional * self.params.clearance_fee_pct
-                account.fees_paid += fee
-                account.realised_pnl -= fee
-
-            residual_equity = account.equity(mark)
-            if account.qty <= 1e-12:
-                account.qty = 0.0
-                account.state = (
-                    AccountState.BACKSTOPPED
-                    if stage is LiquidationStage.BACKSTOP
-                    else AccountState.LIQUIDATED
-                )
-                if residual_equity < 0.0:
-                    # The account closed underwater. Somebody funds the hole.
-                    shortfall = -residual_equity
-                    account.realised_pnl -= residual_equity  # zero it out
-                    self.insurance_balance -= shortfall
-                    outcome.insurance_drawn += shortfall
-
-            if selling:
-                outcome.forced_sell_notional += executed_notional
-            else:
-                outcome.forced_buy_notional += executed_notional
-
-            outcome.events.append(
-                LiquidationEvent(
-                    tick=tick,
-                    account_id=account.id,
-                    stage=stage,
-                    qty=executed_qty,
-                    notional=executed_notional,
-                    fill_price=fill.avg_price,
-                    mark=mark,
-                    reference_price=reference,
-                    slippage_bps=fill.slippage_bps,
-                    equity_before=equity,
-                    mm_required=mm,
-                    shortfall=shortfall,
-                    fee=fee,
-                    survived_at_reference=self._would_survive(account, reference),
-                )
+            self._apply_close(
+                account,
+                stage=stage,
+                qty=executed_qty,
+                price=fill.avg_price,
+                tick=tick,
+                mark=mark,
+                reference=reference,
+                equity_before=equity,
+                mm=mm,
+                slippage_bps=fill.slippage_bps,
+                selling=selling,
+                outcome=outcome,
             )
 
         if self.insurance_balance < 0.0:
@@ -487,6 +434,235 @@ class LiquidationEngine:
             )
 
         return outcome
+
+    # -- shared by continuous trading and the auction ----------------------
+
+    def _plan(
+        self, account: Account, mark: float, two_stage_enabled: bool
+    ) -> tuple[float, float, LiquidationStage, float]:
+        """Which stage closes this account, and how much of it."""
+        equity = account.equity(mark)
+        mm = account.mm_required(mark, self.params)
+        below_backstop = equity < self.params.backstop_threshold(mm)
+
+        if two_stage_enabled and not below_backstop:
+            stage = LiquidationStage.PARTIAL
+            close_qty = self._partial_close_qty(account, mark, mm)
+        elif two_stage_enabled:
+            stage = LiquidationStage.BACKSTOP
+            close_qty = account.qty
+        else:
+            # Control off: no tiering, no two-stage path. The whole position
+            # goes to market the instant maintenance margin breaks.
+            stage = LiquidationStage.MARKET
+            close_qty = account.qty
+        return equity, mm, stage, min(close_qty, account.qty)
+
+    def _apply_close(
+        self,
+        account: Account,
+        *,
+        stage: LiquidationStage,
+        qty: float,
+        price: float,
+        tick: int,
+        mark: float,
+        reference: float | None,
+        equity_before: float,
+        mm: float,
+        slippage_bps: float,
+        selling: bool,
+        outcome: LiquidationOutcome,
+        via_auction: bool = False,
+    ) -> None:
+        """Book one close at one price: P&L, fees, shortfall, flow, event."""
+        executed_notional = qty * price
+        self._book_pnl(account, qty, price)
+        account.qty -= qty
+        account.liquidated_qty += qty
+        account.liquidation_value += executed_notional
+        account.liquidated_tick = tick
+
+        fee = 0.0
+        shortfall = 0.0
+        if stage is LiquidationStage.BACKSTOP:
+            # The punitive path: maintenance margin is forfeited.
+            fee = executed_notional * self.params.clearance_fee_pct
+            account.fees_paid += fee
+            account.realised_pnl -= fee
+        elif stage is LiquidationStage.MARKET:
+            fee = executed_notional * self.params.clearance_fee_pct
+            account.fees_paid += fee
+            account.realised_pnl -= fee
+
+        residual_equity = account.equity(mark)
+        if account.qty <= 1e-12:
+            account.qty = 0.0
+            account.state = (
+                AccountState.BACKSTOPPED
+                if stage is LiquidationStage.BACKSTOP
+                else AccountState.LIQUIDATED
+            )
+            if residual_equity < 0.0:
+                # The account closed underwater. Somebody funds the hole.
+                shortfall = -residual_equity
+                account.realised_pnl -= residual_equity  # zero it out
+                self.insurance_balance -= shortfall
+                outcome.insurance_drawn += shortfall
+
+        # An auction sets the price directly; its volume is not fed back as
+        # impact, or the clearing price would be pushed down twice.
+        if not via_auction:
+            if selling:
+                outcome.forced_sell_notional += executed_notional
+            else:
+                outcome.forced_buy_notional += executed_notional
+
+        outcome.events.append(
+            LiquidationEvent(
+                tick=tick,
+                account_id=account.id,
+                stage=stage,
+                qty=qty,
+                notional=executed_notional,
+                fill_price=price,
+                mark=mark,
+                reference_price=reference,
+                slippage_bps=slippage_bps,
+                equity_before=equity_before,
+                mm_required=mm,
+                shortfall=shortfall,
+                fee=fee,
+                survived_at_reference=self._would_survive(account, reference),
+                via_auction=via_auction,
+            )
+        )
+
+    # -- the reopening auction --------------------------------------------
+
+    def run_auction(
+        self,
+        due: list[Account],
+        *,
+        book: Book,
+        mark: float,
+        reference: float | None,
+        collar_reference: float,
+        collar_pct: float,
+        tick: int,
+        reason: str,
+        two_stage_enabled: bool,
+        throttle_enabled: bool,
+        all_accounts: list[Account],
+        outcome: LiquidationOutcome,
+    ) -> AuctionRecord:
+        """Reopen through a call auction instead of continuous trading.
+
+        Every due liquidation becomes a market order; the book's resting orders
+        inside the collar are the other side. One clearing price, market orders
+        first in queue order, and whatever cannot match inside the collar stays
+        queued for continuous trading, which opens at the clearing price.
+        """
+        sells: list[tuple[Account, LiquidationStage, float, float, float]] = []
+        buys: list[tuple[Account, LiquidationStage, float, float, float]] = []
+        for account in due:
+            equity, mm, stage, qty = self._plan(account, mark, two_stage_enabled)
+            if qty <= 0.0:
+                continue
+            (sells if account.side is Side.LONG else buys).append((account, stage, qty, equity, mm))
+
+        lo = collar_reference * (1.0 - collar_pct / 100.0)
+        hi = collar_reference * (1.0 + collar_pct / 100.0)
+        bids = book.resting_levels(sell=True, bound=lo)
+        asks = book.resting_levels(sell=False, bound=hi)
+        # The throttle is a published limit on how much of the book the engine
+        # may take, and an auction is still the engine taking the book. Without
+        # this cap the whole queue -- hundreds of accounts -- entered at once,
+        # max-volume uncrossing walked it to the collar floor, and the auction
+        # printed the very wick it exists to prevent.
+        if throttle_enabled:
+            budget = self._tick_budget(book, mark, True)
+            sells = self._cap_orders(sells, budget / book.best_bid if book.best_bid > 0 else 0.0)
+            buys = self._cap_orders(buys, budget / book.best_ask if book.best_ask > 0 else 0.0)
+        q_sell = math.fsum(o[2] for o in sells)
+        q_buy = math.fsum(o[2] for o in buys)
+        result = uncross(
+            bids=bids,
+            asks=asks,
+            market_buy_qty=q_buy,
+            market_sell_qty=q_sell,
+            reference=collar_reference,
+            collar=(lo, hi),
+        )
+        price = result.price
+        sell_filled = min(q_sell, result.matched_qty)
+        buy_filled = min(q_buy, result.matched_qty)
+
+        absorbed = 0
+        for orders, filled, selling in ((sells, sell_filled, True), (buys, buy_filled, False)):
+            for (account, stage, _qty, equity, mm), fill in zip(orders, allocate([o[2] for o in orders], filled)):
+                if fill <= 0.0:
+                    continue
+                absorbed += 1
+                self._apply_close(
+                    account,
+                    stage=stage,
+                    qty=fill,
+                    price=price,
+                    tick=tick,
+                    mark=mark,
+                    reference=reference,
+                    equity_before=equity,
+                    mm=mm,
+                    slippage_bps=abs(price - mark) / mark / 1e-4 if mark > 0 else 0.0,
+                    selling=selling,
+                    outcome=outcome,
+                    via_auction=True,
+                )
+
+        # Resting orders taken by the auction, then continuous opens at the price.
+        book.consume(sell=True, notional=max(0.0, result.matched_qty - buy_filled) * price)
+        book.consume(sell=False, notional=max(0.0, result.matched_qty - sell_filled) * price)
+        if result.matched_qty > 0.0:
+            book.set_mid(price)
+
+        if self.insurance_balance < 0.0:
+            self._auto_deleverage(
+                deficit=-self.insurance_balance,
+                accounts=all_accounts,
+                mark=mark,
+                tick=tick,
+                reference=reference,
+                outcome=outcome,
+            )
+
+        return AuctionRecord(
+            tick=tick,
+            reason=reason,
+            reference=collar_reference,
+            collar_lo=lo,
+            collar_hi=hi,
+            clearing_price=price,
+            matched_qty=result.matched_qty,
+            matched_notional=result.matched_qty * price,
+            imbalance_qty=result.imbalance_qty,
+            liquidations_queued=len(sells) + len(buys),
+            liquidations_absorbed=absorbed,
+            liquidation_qty_carried=(q_sell - sell_filled) + (q_buy - buy_filled),
+        )
+
+    @staticmethod
+    def _cap_orders(orders, max_qty: float):
+        """Admit orders in queue order until the quantity cap is reached; the
+        rest wait for continuous trading."""
+        admitted, left = [], max(0.0, max_qty)
+        for account, stage, qty, equity, mm in orders:
+            if left <= 0.0:
+                break
+            take = min(qty, left)
+            admitted.append((account, stage, take, equity, mm))
+            left -= take
+        return admitted
 
     # -- helpers ------------------------------------------------------------
 

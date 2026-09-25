@@ -149,7 +149,8 @@ class Book:
         "_offsets",
         "_norm_1pct",
         "_impact_decay",
-        "_consumed",
+        "_consumed_bid",
+        "_consumed_ask",
     )
 
     def __init__(self, params: BookParams, initial_price: float) -> None:
@@ -158,7 +159,8 @@ class Book:
         self.venue_dislocation = 0.0
         self.liquidity_frac = 1.0
         self.pressure_bps = 0.0
-        self._consumed = 0.0
+        self._consumed_bid = 0.0
+        self._consumed_ask = 0.0
         self._mid = initial_price
 
         # Precompute the level shape once. Level i sits (i+1)*level_bps from mid.
@@ -241,7 +243,8 @@ class Book:
         self.fair_value = fair_value
         self.venue_dislocation = venue_dislocation
         # Resting orders taken during the previous tick are replenished now.
-        self._consumed = 0.0
+        self._consumed_bid = 0.0
+        self._consumed_ask = 0.0
         p = self.params
         half_life = max(
             1e-6,
@@ -262,11 +265,27 @@ class Book:
 
     # -- execution ---------------------------------------------------------
 
+    def reachable(self, *, sell: bool) -> float:
+        """Depth a single tick of market orders can still consume on one side.
+
+        Tracked per side. A sell takes bids and a buy takes asks; a single
+        shared counter made a short liquidation skip ask levels nobody had
+        touched, just because longs had sold into the bids earlier that tick.
+        """
+        gross = self.depth_within(self.params.max_reach_pct)
+        return max(0.0, gross - (self._consumed_bid if sell else self._consumed_ask))
+
     @property
     def reachable_depth(self) -> float:
-        """Depth a single tick of market orders can still consume."""
-        gross = self.depth_within(self.params.max_reach_pct)
-        return max(0.0, gross - self._consumed)
+        """Bid-side reachable depth: what a forced sale can still take."""
+        return self.reachable(sell=True)
+
+    def consume(self, *, sell: bool, notional: float) -> None:
+        """Record depth taken outside `walk`, e.g. by a call auction."""
+        if sell:
+            self._consumed_bid += max(0.0, notional)
+        else:
+            self._consumed_ask += max(0.0, notional)
 
     def walk(
         self, *, sell: bool, notional: float | None = None, qty: float | None = None
@@ -299,7 +318,7 @@ class Book:
         filled_qty = 0.0
         worst = start
 
-        already = self._consumed
+        already = self._consumed_bid if sell else self._consumed_ask
         walked = 0.0
         for offset_pct, weight in zip(self._offsets, self._weights):
             if offset_pct > self.params.max_reach_pct:
@@ -329,7 +348,10 @@ class Book:
             if remaining <= 1e-9:
                 break
 
-        self._consumed += filled_notional
+        if sell:
+            self._consumed_bid += filled_notional
+        else:
+            self._consumed_ask += filled_notional
         exhausted = remaining > 1e-9
         avg = filled_notional / filled_qty if filled_qty > 0 else start
         slippage = abs(avg - start) / start / BPS if start > 0 else 0.0
@@ -342,6 +364,33 @@ class Book:
             slippage_bps=slippage,
             exhausted=exhausted,
         )
+
+    def resting_levels(self, *, sell: bool, bound: float) -> list[tuple[float, float]]:
+        """Resting orders a call auction can match: bids at or above `bound`
+        (for incoming sells) or asks at or below it (for incoming buys), as
+        (price, quantity). An auction pools the whole book inside its collar,
+        so the per-tick reach limit of continuous trading does not apply."""
+        start = self.best_bid if sell else self.best_ask
+        sign = -1.0 if sell else 1.0
+        out: list[tuple[float, float]] = []
+        for offset_pct, weight in zip(self._offsets, self._weights):
+            price = start * (1.0 + sign * offset_pct / 100.0)
+            if price <= 0.0 or (sell and price < bound) or (not sell and price > bound):
+                break
+            notional = weight * self._norm_1pct * self.liquidity_frac
+            if notional > 0.0:
+                out.append((price, notional / price))
+        return out
+
+    def set_mid(self, price: float) -> None:
+        """Open continuous trading at a price discovered elsewhere -- a call
+        auction's clearing price. Expressed as pressure, so it decays back
+        toward fair value like any other impact."""
+        base = self.fair_value * (1.0 + self.venue_dislocation)
+        if base <= 0.0 or price <= 0.0:
+            return
+        self.pressure_bps = min(self.params.max_pressure_bps, (1.0 - price / base) / BPS)
+        self._mid = base * (1.0 - self.pressure_bps * BPS)
 
     # -- pre-trade controls -------------------------------------------------
 

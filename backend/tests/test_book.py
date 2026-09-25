@@ -143,3 +143,30 @@ def test_volatility_tracker_measures_the_move_not_its_shape() -> None:
     for price in (100.0, 100.0, 95.0, 100.0):
         tracker.push(price)
     assert tracker.realised_bps == pytest.approx(500.0, rel=1e-6)
+
+
+def test_consumption_is_tracked_per_side() -> None:
+    """A sell takes bids and a buy takes asks. A shared counter made a buy skip
+    ask levels nobody had touched, just because sells had hit the bids."""
+    book = make_book()
+    asks_before = book.reachable(sell=False)
+    book.walk(sell=True, notional=book.reachable(sell=True) * 0.9)
+    assert book.reachable(sell=False) == pytest.approx(asks_before)
+    assert book.reachable(sell=True) < asks_before * 0.2
+
+
+def test_resting_levels_stop_at_the_bound() -> None:
+    book = make_book()
+    bids = book.resting_levels(sell=True, bound=99.0)
+    assert bids and all(p >= 99.0 for p, _ in bids)
+    asks = book.resting_levels(sell=False, bound=101.0)
+    assert asks and all(p <= 101.0 for p, _ in asks)
+
+
+def test_set_mid_opens_at_a_discovered_price_and_decays_from_there() -> None:
+    book = make_book()
+    book.set_mid(97.0)
+    assert book.mid == pytest.approx(97.0, rel=1e-9)
+    for _ in range(60):
+        book.settle(100.0, 0.0)
+    assert book.mid > 99.5

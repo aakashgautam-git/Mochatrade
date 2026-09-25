@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 
+from .auction import AuctionRecord
 from .book import Book, VolatilityTracker
 from .controls import (
     ActionKind,
@@ -64,8 +65,8 @@ from .scenario import Scenario
 #: Version of the Frame's shape. Anything that persists frames must include it
 #: in its cache key: a run stored before a field existed must not be served as
 #: if it had that field. 2 = per-source oracle observations. 3 = pause reason
-#: and velocity escalation level.
-FRAME_SCHEMA = 3
+#: and velocity escalation level. 4 = reopening call auction record.
+FRAME_SCHEMA = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +123,9 @@ class Frame:
     accounts_open: int
     aggregate_equity: float
     log: tuple[str, ...] = ()
+    auction: AuctionRecord | None = None
+    """Set on the tick a pause reopened through a call auction."""
+
     sources: tuple[SourceObservation, ...] = ()
     """Every oracle source's part in this tick's composite: the price it
     printed, the price the composite used, its effective weight, and why it was
@@ -161,6 +165,11 @@ class RunSummary:
     saved_by_grace: int
     upi_credits_issued: int
     throttled_ticks: int
+    auctions: int
+    """Pauses that reopened through a call auction rather than straight into
+    continuous trading."""
+
+    auction_liquidations_absorbed: int
     peak_unfilled_notional: float
     """Largest notional the book could not absorb in a single tick. Reported as
     a peak rather than a running total because an unfilled position is
@@ -284,6 +293,10 @@ class Engine:
         self.cum_upi_credits = 0
         self.peak_unfilled = 0.0
         self.throttled_ticks = 0
+        self.auctions = 0
+        self.auction_absorbed = 0
+        self._paused_prev = False
+        self._pause_reason_prev: str | None = None
         self.max_divergence_bps = 0.0
         self.min_mark = math.inf
         self.min_reference = math.inf
@@ -453,6 +466,12 @@ class Engine:
         self._update_reachability(tick)
         outcome = LiquidationOutcome()
         liquidations_paused = self.flags.liquidations_paused or self.auto_liq_pause
+        # A pause never reopens straight into continuous trading: the first tick
+        # after one uncrosses the queued liquidations against resting orders at
+        # a single price. Without this, the whole queue hit the book at once on
+        # every reopen and the mark zig-zagged 83 times in one run.
+        reopening = self._paused_prev and not self.flags.trading_paused
+        auction: AuctionRecord | None = None
         if not (liquidations_paused or self.flags.trading_paused):
             self.liq.settle_upi_deposits(self.accounts, tick)
             due = self.liq.evaluate(
@@ -463,24 +482,61 @@ class Engine:
                 upi_credit_enabled=self.controls.upi_prefunded_credit,
                 outcome=outcome,
             )
-            self.liq.run(
-                due,
-                book=self.book,
-                mark=mark,
-                reference=reference.price,
-                tick=tick,
-                throttle_enabled=(
-                    self.controls.liquidation_throttle or self.operator_throttle
-                ),
-                two_stage_enabled=self.controls.two_stage_liquidation,
-                all_accounts=self.accounts,
-                outcome=outcome,
-            )
+            if reopening:
+                auction = self.liq.run_auction(
+                    due,
+                    book=self.book,
+                    mark=mark,
+                    reference=reference.price,
+                    # Collared around the Reference Composite, not the book: the
+                    # same principle as marking. Measured against a book-anchored
+                    # collar, results were indistinguishable once throttled.
+                    collar_reference=composite.price or self.book.mid,
+                    collar_pct=params.price_band_pct(
+                        scenario.instrument_tier, offhours=scenario.offhours
+                    ),
+                    tick=tick,
+                    reason=self._pause_reason_prev or "velocity",
+                    two_stage_enabled=self.controls.two_stage_liquidation,
+                    throttle_enabled=(
+                        self.controls.liquidation_throttle or self.operator_throttle
+                    ),
+                    all_accounts=self.accounts,
+                    outcome=outcome,
+                )
+                self.auctions += 1
+                self.auction_absorbed += auction.liquidations_absorbed
+                side = "sellers" if auction.imbalance_qty < 0 else "buyers"
+                lines.append(
+                    f"Reopened through a call auction after the {auction.reason.replace('_', ' ')} "
+                    f"pause: cleared at {auction.clearing_price:,.2f} inside a "
+                    f"{auction.collar_lo:,.0f}-{auction.collar_hi:,.0f} collar, "
+                    f"{auction.liquidations_absorbed} of {auction.liquidations_queued} "
+                    f"queued liquidations absorbed"
+                    + (f", unmatched {side} carried into continuous trading."
+                       if auction.liquidation_qty_carried > 0 else ".")
+                )
+            else:
+                self.liq.run(
+                    due,
+                    book=self.book,
+                    mark=mark,
+                    reference=reference.price,
+                    tick=tick,
+                    throttle_enabled=(
+                        self.controls.liquidation_throttle or self.operator_throttle
+                    ),
+                    two_stage_enabled=self.controls.two_stage_liquidation,
+                    all_accounts=self.accounts,
+                    outcome=outcome,
+                )
 
         # 9. forced flow feeds the next tick's price. The spiral.
         self.book.apply_flow(outcome.net_sell_notional)
 
-        frame = self._emit(tick, true_price, composite, reference, mark_result, outcome, lines)
+        frame = self._emit(tick, true_price, composite, reference, mark_result, outcome, lines, auction)
+        self._paused_prev = self.flags.trading_paused
+        self._pause_reason_prev = frame.pause_reason
         self.tick += 1
         return frame
 
@@ -527,6 +583,7 @@ class Engine:
         mark_result: MarkResult,
         outcome: LiquidationOutcome,
         lines: list[str],
+        auction: AuctionRecord | None = None,
     ) -> Frame:
         mark = mark_result.mark
         closed_now = [
@@ -608,6 +665,7 @@ class Engine:
             accounts_open=len(open_accounts),
             aggregate_equity=math.fsum(a.equity(mark) for a in open_accounts),
             log=tuple(lines),
+            auction=auction,
             sources=observations(composite, self.params, tick=tick),
         )
         self.frames.append(frame)
@@ -694,6 +752,8 @@ class Engine:
             saved_by_grace=self.cum_saved_grace,
             upi_credits_issued=self.cum_upi_credits,
             throttled_ticks=self.throttled_ticks,
+            auctions=self.auctions,
+            auction_liquidations_absorbed=self.auction_absorbed,
             peak_unfilled_notional=self.peak_unfilled,
             max_divergence_bps=self.max_divergence_bps,
             peak_mark_pct=self._pct(self.max_mark),

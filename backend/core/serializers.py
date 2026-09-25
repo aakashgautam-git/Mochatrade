@@ -152,6 +152,23 @@ class SourceObservationSerializer(serializers.Serializer):
     excluded_reason = serializers.CharField(allow_blank=True)
 
 
+class AuctionSerializer(serializers.Serializer):
+    """One reopening call auction."""
+
+    tick = serializers.IntegerField()
+    reason = serializers.CharField()
+    reference = serializers.FloatField()
+    collar_lo = serializers.FloatField()
+    collar_hi = serializers.FloatField()
+    clearing_price = serializers.FloatField()
+    matched_qty = serializers.FloatField()
+    matched_notional = serializers.FloatField()
+    imbalance_qty = serializers.FloatField()
+    liquidations_queued = serializers.IntegerField()
+    liquidations_absorbed = serializers.IntegerField()
+    liquidation_qty_carried = serializers.FloatField()
+
+
 class TickSerializer(serializers.Serializer):
     """One frame. Numeric on purpose -- see the money note in the module docstring."""
 
@@ -184,6 +201,7 @@ class TickSerializer(serializers.Serializer):
     unnecessary_liquidations = serializers.IntegerField()
     accounts_open = serializers.IntegerField()
     aggregate_equity = serializers.FloatField()
+    auction = AuctionSerializer(allow_null=True, default=None)
     sources = SourceObservationSerializer(many=True, default=list)
 
 
@@ -204,6 +222,8 @@ class RunSummarySerializer(serializers.Serializer):
     min_depth_pct_of_baseline = serializers.FloatField()
     saved_by_grace = serializers.IntegerField()
     upi_credits_issued = serializers.IntegerField()
+    auctions = serializers.IntegerField(default=0)
+    auction_liquidations_absorbed = serializers.IntegerField(default=0)
     open_interest_inr = serializers.SerializerMethodField()
     liquidated_notional_inr = serializers.SerializerMethodField()
     unnecessary_notional_inr = serializers.SerializerMethodField()
