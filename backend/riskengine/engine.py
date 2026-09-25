@@ -579,6 +579,22 @@ class Engine:
 
     # -- driving -----------------------------------------------------------
 
+    def queue_action(self, action: OperatorAction) -> None:
+        """Schedule an operator decision for a tick that has not run yet.
+
+        Stepped runs need this: the war room decides at T+120 while the engine
+        sits at tick 120, so the action cannot have been supplied up front. It
+        is still part of the determinism contract -- replaying the same action
+        sequence against the same seed reproduces the run exactly, which is how
+        a live engine is rebuilt after a process restart.
+        """
+        if action.tick < self.tick:
+            raise ValueError(
+                f"cannot queue an action at tick {action.tick}; the engine is "
+                f"already at tick {self.tick}. The log is append-only forward."
+            )
+        self._actions.setdefault(action.tick, []).append(action)
+
     @property
     def finished(self) -> bool:
         return self.tick >= self.scenario.n_ticks

@@ -10,13 +10,14 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 
 ## Current phase
 
-> **PHASE 2 — DJANGO MODELS + ADMIN (complete).** Ten models, migrations, a
-> demo-ready admin, and `seed_policy`. `RiskPolicy` is a generated mirror of
-> `riskengine.params.RiskParams`: defaults and `help_text` both come from the
-> dataclass and `FIELD_SOURCES`, and `to_params()` is the only route by which
-> the engine ever receives configuration. 214 tests green.
+> **PHASE 4 — API LAYER (complete).** 18 DRF routes over the engine. Every
+> engine instantiation goes through the active `RiskPolicy.to_params()`, and a
+> test fails the build if anything else constructs parameters. Runs are
+> persisted and served from the database; a policy edit invalidates them.
+> `make seed` pre-warms all twelve runs. The screening-round demo still works,
+> now served from cache. 254 tests green.
 >
-> **NEXT: PHASE 4 — REST API.** Await instructions before starting.
+> **NEXT: PHASE 5 — Design system.** Await instructions before starting.
 
 Phases are numbered by the project plan, not by build order: the risk engine
 (3) was built before the Django layer (2) because everything downstream needs a
@@ -28,8 +29,8 @@ trustworthy engine more than it needs a database.
 | 1 | Scaffold — repo, tooling, design tokens, docs | Done |
 | 2 | Django models + admin | Done |
 | 3 | Risk engine — pure-Python core + tests | Done |
-| 4 | REST API | **Next** |
-| 5 | Design system | Not started |
+| 4 | REST API | Done |
+| 5 | Design system | **Next** |
 | 6 | Simulator surface | Not started |
 | 7 | War room | Not started |
 | 8 | Forensics | Not started |
@@ -175,6 +176,39 @@ be changed live in front of a judge.
 
 `IncidentAction` is append-only and this is enforced, not merely intended: add,
 change and delete all return 403 from the admin.
+
+### The config-bypass guard
+
+No file in `core/` may import `DEFAULT_PARAMS` or construct `RiskParams`, except
+`models.py` (which generates the mirror and owns `to_params()`) and
+`seed_policy.py` (which builds v1 from the defaults). Every engine run goes
+through `core/runner.py`, which reads the active `RiskPolicy`.
+`tests/test_api.py::test_no_view_bypasses_the_active_policy` enforces this by
+AST scan, so a docstring mentioning the rule cannot trip it and an aliased
+import cannot slip past it. Without this rule the admin's policy editor would be
+decorative: a judge edits a tier and the page does not move.
+
+### Run cache
+
+A completed run is keyed on `(scenario, controls_enabled, seed,
+policy_fingerprint)`. The fingerprint hashes the actual parameter VALUES, not
+`RiskPolicy.version` — editing a margin tier does not bump the version, and a
+version-keyed cache would serve a stale run that contradicts the admin.
+Reverting an edit restores the old fingerprint and hits the original runs.
+
+### Live engines
+
+War-room incidents step a live `Engine` held in `runner._LIVE`, keyed by
+incident code. It is never trusted to survive a restart: on a miss it is
+rebuilt by replaying the persisted `IncidentAction` log from tick 0, which lands
+on byte-identical state because the engine is deterministic.
+
+### Money on the wire
+
+Ledger figures serialise as two-place decimal strings (`"25000.00"`), never as
+JSON numbers. Tick series stay numeric — they are chart samples, not money. The
+one exception is the legacy `/api/compare/<slug>/`, which keeps numeric money
+because the shipped screening-round page parses a number.
 
 ---
 

@@ -1,116 +1,658 @@
-"""Read-only comparison API. No database, no serializers, no ViewSets.
+"""REST API. Server holds run state; there are no websockets.
 
-One job: run the identical seeded shock twice, controls off and controls on,
-and return the difference. The engine is called directly and nothing is
-persisted, so this endpoint cannot fail on a missing migration or an empty
-table while a judge is watching.
+Every engine instantiation in this module goes through `runner`, which reads the
+active RiskPolicy. Nothing here imports `DEFAULT_PARAMS` or constructs
+`RiskParams` -- a test scans for it and fails the build if one appears.
 
-Parameters come from riskengine's own defaults rather than the active
-RiskPolicy row, deliberately: the page must render with an empty database.
+Error contract: bad input is a 400 with a `detail` a human can act on. A missing
+resource named in the URL is a 404. A server that has not been seeded is a 503.
+A user mistake is never a 500.
 """
 from __future__ import annotations
 
-from django.http import Http404, JsonResponse
+from typing import Any
 
-from riskengine.controls import ControlStack
-from riskengine.engine import Engine, Frame
-from riskengine.params import DEFAULT_PARAMS
-from riskengine.scenario import by_key, library
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-MAX_POINTS = 300
+from riskengine.controls import OperatorAction
+
+from . import runner
+from .models import (
+    ActionType,
+    Claim,
+    ClaimStatus,
+    CommsUpdate,
+    Incident,
+    IncidentAction,
+    IncidentStatus,
+    Instrument,
+    RiskPolicy,
+    Scenario,
+)
+from .serializers import (
+    ActionRequestSerializer,
+    ClaimDecisionSerializer,
+    ClaimSerializer,
+    CommsCreateSerializer,
+    CommsUpdateSerializer,
+    CompareRequestSerializer,
+    DeclareIncidentSerializer,
+    IncidentActionSerializer,
+    IncidentSerializer,
+    IncidentStateSerializer,
+    InstrumentSerializer,
+    PriceObservationSerializer,
+    PublicStatusUpdateSerializer,
+    RiskPolicySerializer,
+    RunRequestSerializer,
+    RunSerializer,
+    RunSummarySerializer,
+    ScenarioDetailSerializer,
+    ScenarioListSerializer,
+    StepRequestSerializer,
+    TickSerializer,
+)
+
+LEGACY_MAX_POINTS = 300
 
 
-def scenarios(_request) -> JsonResponse:
-    return JsonResponse(
-        {
-            "scenarios": [
-                {
-                    "slug": s.key,
-                    "name": s.title,
-                    "summary": s.summary,
-                    "layer": s.layer.value,
-                    "instrument": s.instrument,
-                    "ist_label": s.ist_label,
-                    "expected_class": s.expected_class,
-                }
-                for s in library()
-            ]
-        }
-    )
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+
+def _bad(detail: str) -> Response:
+    return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _series(frames: list[Frame]) -> list[dict]:
-    """Downsample to <=MAX_POINTS. Prices are sampled at the bucket head, but
-    liquidations are SUMMED across the bucket -- sampling a spiky count would
-    drop most of the cascade on the floor."""
+def _scenario_or_400(slug: str) -> Scenario | Response:
+    row = Scenario.objects.select_related("instrument").filter(slug=slug).first()
+    if row is None:
+        known = ", ".join(Scenario.objects.values_list("slug", flat=True)) or "none seeded"
+        return _bad(f"Unknown scenario_slug {slug!r}. Known scenarios: {known}.")
+    return row
+
+
+def _reduction(before: float, after: float) -> float:
+    """Percent by which the controls REDUCED a quantity. Positive is better;
+    zero when there was nothing to reduce."""
+    if not before:
+        return 0.0
+    return round((1.0 - after / before) * 100.0, 1)
+
+
+def _wick(summary: dict) -> float:
+    """Largest excursion of the mark from its opening price, either direction.
+    A pump (the manipulation scenario) is as much a wick as a crash."""
+    return max(abs(summary.get("trough_mark_pct", 0.0)), abs(summary.get("peak_mark_pct", 0.0)))
+
+
+def _run_payload(run) -> dict:
+    return {
+        "run_id": run.id,
+        "controls_enabled": run.controls_enabled,
+        "seed": run.seed,
+        "policy_version": run.policy.version,
+        "summary": RunSummarySerializer(run.result_summary).data,
+        "ticks": TickSerializer(run.tick_data, many=True).data,
+    }
+
+
+# --------------------------------------------------------------------------
+# Policy, instruments, scenarios
+# --------------------------------------------------------------------------
+
+class PolicyListView(APIView):
+    def get(self, request: Request) -> Response:
+        qs = RiskPolicy.objects.prefetch_related("margin_tier_rows", "instrument_tier_rows")
+        active = request.query_params.get("active")
+        if active is not None:
+            if active.lower() not in {"true", "false", "1", "0"}:
+                return _bad("`active` must be true or false.")
+            qs = qs.filter(is_active=active.lower() in {"true", "1"})
+        return Response(RiskPolicySerializer(qs, many=True).data)
+
+
+class InstrumentListView(APIView):
+    def get(self, request: Request) -> Response:
+        return Response(InstrumentSerializer(Instrument.objects.all(), many=True).data)
+
+
+class ScenarioListView(APIView):
+    def get(self, request: Request) -> Response:
+        qs = Scenario.objects.select_related("instrument")
+        return Response(ScenarioListSerializer(qs, many=True).data)
+
+
+class ScenarioDetailView(APIView):
+    def get(self, request: Request, slug: str) -> Response:
+        row = get_object_or_404(Scenario.objects.select_related("instrument"), slug=slug)
+        return Response(ScenarioDetailSerializer(row).data)
+
+
+# --------------------------------------------------------------------------
+# Runs
+# --------------------------------------------------------------------------
+
+class RunCreateView(APIView):
+    """POST /api/runs/ -- run to completion (or serve from cache), one shot."""
+
+    def post(self, request: Request) -> Response:
+        req = RunRequestSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        row = _scenario_or_400(data["scenario_slug"])
+        if isinstance(row, Response):
+            return row
+
+        policy = None
+        if data.get("policy_id") is not None:
+            policy = RiskPolicy.objects.filter(pk=data["policy_id"]).first()
+            if policy is None:
+                return _bad(f"No RiskPolicy with id {data['policy_id']}.")
+
+        run, executed = runner.get_or_run(
+            row,
+            controls_enabled=data["controls_enabled"],
+            seed=data.get("seed"),
+            policy=policy,
+        )
+        payload = _run_payload(run)
+        payload["cache"] = "miss" if executed else "hit"
+        return Response(payload, status=status.HTTP_201_CREATED if executed else status.HTTP_200_OK)
+
+
+class RunCompareView(APIView):
+    """POST /api/runs/compare/ -- the identical seeded shock, both control modes."""
+
+    def post(self, request: Request) -> Response:
+        req = CompareRequestSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        row = _scenario_or_400(data["scenario_slug"])
+        if isinstance(row, Response):
+            return row
+
+        off, off_ran = runner.get_or_run(row, controls_enabled=False, seed=data.get("seed"))
+        on, on_ran = runner.get_or_run(row, controls_enabled=True, seed=data.get("seed"))
+        a, b = off.result_summary, on.result_summary
+
+        return Response(
+            {
+                "scenario_slug": row.slug,
+                "seed": off.seed,
+                "policy_version": off.policy.version,
+                "cache": "miss" if (off_ran or on_ran) else "hit",
+                "off": _run_payload(off),
+                "on": _run_payload(on),
+                "delta": {
+                    "liquidations_pct": _reduction(a["accounts_liquidated"], b["accounts_liquidated"]),
+                    "notional_pct": _reduction(a["liquidated_notional"], b["liquidated_notional"]),
+                    "wick_pct": _reduction(_wick(a), _wick(b)),
+                    "adl_pct": _reduction(a["adl_accounts"], b["adl_accounts"]),
+                },
+            }
+        )
+
+
+class LegacyCompareView(APIView):
+    """GET /api/compare/<slug>/ -- the screening-round demo's exact shape.
+
+    Kept byte-compatible so the live demo cannot break while the rest of the API
+    is rebuilt underneath it. Now served from persisted runs against the active
+    policy rather than by re-simulating with hardcoded defaults, so it is both
+    faster and honest about which policy produced it.
+
+    Money stays numeric HERE ONLY, because the shipped frontend parses it as a
+    number. Every new endpoint sends money as a decimal string.
+    """
+
+    def get(self, request: Request, slug: str) -> Response:
+        row = get_object_or_404(Scenario.objects.select_related("instrument"), slug=slug)
+        scenario = runner.engine_scenario(row)
+        off, _ = runner.get_or_run(row, controls_enabled=False)
+        on, _ = runner.get_or_run(row, controls_enabled=True)
+
+        def side(run) -> dict[str, Any]:
+            s = run.result_summary
+            return {
+                "liquidated": s["accounts_liquidated"],
+                "unnecessary": s["unnecessary_liquidations"],
+                "adl": s["adl_accounts"],
+                "user_loss_inr": round(s["user_loss"], 2),
+                "accounts_total": s["accounts_total"],
+                "trough_pct": round(s["trough_mark_pct"], 2),
+                "series": _legacy_series(run.tick_data),
+            }
+
+        a, b = side(off), side(on)
+        return Response(
+            {
+                "scenario": {
+                    "slug": scenario.key,
+                    "name": scenario.title,
+                    "summary": scenario.summary,
+                    "instrument": scenario.instrument,
+                    "ist_label": scenario.ist_label,
+                    "layer": scenario.layer.value,
+                    "liable_layer_note": scenario.liable_layer_note,
+                    "seed": off.seed,
+                },
+                "assumed_scale_note": row.assumed_scale_note or scenario.assumed_scale_note,
+                "off": a,
+                "on": b,
+                "delta": {
+                    "liquidated_pct": _reduction(a["liquidated"], b["liquidated"]),
+                    "loss_pct": _reduction(a["user_loss_inr"], b["user_loss_inr"]),
+                    "unnecessary_pct": _reduction(a["unnecessary"], b["unnecessary"]),
+                    "adl_pct": _reduction(a["adl"], b["adl"]),
+                },
+            }
+        )
+
+
+def _legacy_series(frames: list[dict]) -> list[dict]:
+    """Downsample to <=300 points. Prices sampled at the bucket head;
+    liquidations SUMMED across the bucket so cascade spikes survive."""
     total = len(frames)
     if total == 0:
         return []
-    step = max(1, -(-total // MAX_POINTS))
-    out: list[dict] = []
+    step = max(1, -(-total // LEGACY_MAX_POINTS))
+    out = []
     for start in range(0, total, step):
         bucket = frames[start : start + step]
         head = bucket[0]
         out.append(
             {
-                "t": head.tick,
-                "oracle": round(head.composite, 2) if head.composite else None,
-                "mark": round(head.mark, 2),
-                "ltp": round(head.book_mid, 2),
-                "liquidations": sum(f.liquidated_this_tick for f in bucket),
+                "t": head["tick"],
+                "oracle": round(head["composite"], 2) if head["composite"] else None,
+                "mark": round(head["mark"], 2),
+                "ltp": round(head["book_mid"], 2),
+                "liquidations": sum(f["liquidated_this_tick"] for f in bucket),
             }
         )
     return out
 
 
-def _run(scenario, controls: ControlStack) -> dict:
-    result = Engine(scenario, DEFAULT_PARAMS, controls).run()
-    s = result.summary
-    return {
-        "liquidated": s.accounts_liquidated,
-        "unnecessary": s.unnecessary_liquidations,
-        "adl": s.adl_accounts,
-        "user_loss_inr": round(s.user_loss, 2),
-        "accounts_total": s.accounts_total,
-        "trough_pct": round(s.trough_mark_pct, 2),
-        "series": _series(result.frames),
-    }
+# --------------------------------------------------------------------------
+# Incidents: the war room
+# --------------------------------------------------------------------------
+
+def _incident(code: str) -> Incident:
+    return get_object_or_404(
+        Incident.objects.select_related("run", "run__scenario", "run__policy"), code=code
+    )
 
 
-def compare(_request, slug: str) -> JsonResponse:
-    try:
-        scenario = by_key(slug)
-    except KeyError:
-        raise Http404(f"unknown scenario {slug!r}")
-
-    off = _run(scenario, ControlStack.none())
-    on = _run(scenario, ControlStack.full())
-
-    def drop(before: float, after: float) -> float:
-        if not before:
-            return 0.0
-        return round((1.0 - after / before) * 100.0, 1)
-
-    return JsonResponse(
+def _state_payload(incident: Incident) -> dict:
+    engine = runner.live_engine(incident)
+    frame = engine.frames[-1].as_dict() if engine.frames else None
+    flags = engine.flags
+    return IncidentStateSerializer(
         {
-            "scenario": {
-                "slug": scenario.key,
-                "name": scenario.title,
-                "summary": scenario.summary,
-                "instrument": scenario.instrument,
-                "ist_label": scenario.ist_label,
-                "layer": scenario.layer.value,
-                "liable_layer_note": scenario.liable_layer_note,
-                "seed": scenario.seed,
-            },
-            "assumed_scale_note": scenario.assumed_scale_note,
-            "off": off,
-            "on": on,
-            "delta": {
-                "liquidated_pct": drop(off["liquidated"], on["liquidated"]),
-                "loss_pct": drop(off["user_loss_inr"], on["user_loss_inr"]),
-                "unnecessary_pct": drop(off["unnecessary"], on["unnecessary"]),
-                "adl_pct": drop(off["adl"], on["adl"]),
+            "incident": incident,
+            "elapsed_seconds": runner.elapsed_seconds(incident),
+            "current_tick": engine.tick,
+            "total_ticks": engine.scenario.n_ticks,
+            "finished": engine.finished,
+            "snapshot": frame,
+            "active_controls": engine.controls.as_dict(),
+            "flags": {
+                "reduce_only": flags.reduce_only or engine.auto_reduce_only,
+                "liquidations_paused": flags.liquidations_paused or engine.auto_liq_pause,
+                "halted": flags.halted,
+                "max_leverage": flags.max_leverage,
+                "stage": flags.stage.value,
+                "operator_throttle": engine.operator_throttle,
             },
         }
-    )
+    ).data
+
+
+class IncidentCreateView(APIView):
+    """POST /api/incidents/ -- declare, open the record, start a stepped run."""
+
+    def post(self, request: Request) -> Response:
+        req = DeclareIncidentSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        row = _scenario_or_400(data["scenario_slug"])
+        if isinstance(row, Response):
+            return row
+
+        with transaction.atomic():
+            incident = Incident.objects.create(
+                severity=data["severity"],
+                incident_commander=data["incident_commander"],
+                ops_lead=data["ops_lead"],
+                comms_lead=data["comms_lead"],
+            )
+            incident.run = runner.start_stepped_run(
+                incident, row, controls_enabled=data["controls_enabled"], seed=data.get("seed")
+            )
+            incident.save(update_fields=["run"])
+            IncidentAction.objects.create(
+                incident=incident,
+                tick=0,
+                actor=data["incident_commander"] or "IC",
+                action_type=ActionType.DECLARE,
+                rationale="SEV-1 declared. Roles assumed as pre-assigned.",
+            )
+
+        return Response(_state_payload(incident), status=status.HTTP_201_CREATED)
+
+
+class IncidentStateView(APIView):
+    def get(self, request: Request, code: str) -> Response:
+        return Response(_state_payload(_incident(code)))
+
+
+class IncidentStepView(APIView):
+    def post(self, request: Request, code: str) -> Response:
+        req = StepRequestSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        incident = _incident(code)
+        engine = runner.live_engine(incident)
+        if engine.finished:
+            return _bad(f"{code} has already run to completion; there are no ticks left.")
+
+        before = engine.tick
+        new = []
+        for _ in range(req.validated_data["ticks"]):
+            if engine.finished:
+                break
+            new.append(engine.step().as_dict())
+        runner.persist_live(incident, engine)
+
+        return Response(
+            {
+                "from_tick": before,
+                "to_tick": engine.tick,
+                "finished": engine.finished,
+                "snapshots": TickSerializer(new, many=True).data,
+            }
+        )
+
+
+class IncidentActionView(APIView):
+    """POST /api/incidents/{code}/action/ -- a war-room decision.
+
+    Written to the append-only log first, then applied to the live engine at the
+    current tick, so the log is never behind the market it describes.
+    """
+
+    def post(self, request: Request, code: str) -> Response:
+        req = ActionRequestSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        valid = {c for c, _ in ActionType.choices}
+        if data["action_type"] not in valid:
+            return _bad(
+                f"Unknown action_type {data['action_type']!r}. "
+                f"Valid: {', '.join(sorted(valid))}."
+            )
+
+        incident = _incident(code)
+        engine = runner.live_engine(incident)
+        if engine.finished:
+            return _bad(f"{code} has run to completion; actions can no longer change it.")
+
+        tick = engine.tick
+        with transaction.atomic():
+            logged = IncidentAction.objects.create(
+                incident=incident,
+                tick=tick,
+                actor=data["actor"],
+                action_type=data["action_type"],
+                params=data["params"],
+                rationale=data["rationale"],
+                reversible=data["action_type"] not in runner.IRREVERSIBLE,
+            )
+            kind = runner.ENGINE_ACTIONS.get(data["action_type"])
+            if kind is not None:
+                engine.queue_action(
+                    OperatorAction(
+                        tick=tick,
+                        kind=kind,
+                        value=data["params"].get("value"),
+                        note=data["params"].get("note", ""),
+                    )
+                )
+            if data["action_type"] == ActionType.RESOLVE:
+                incident.status = IncidentStatus.RESOLVED
+                incident.resolved_at = timezone.now()
+                incident.save(update_fields=["status", "resolved_at"])
+            elif incident.status == IncidentStatus.DECLARED and kind is not None:
+                incident.status = IncidentStatus.CONTAINED
+                incident.save(update_fields=["status"])
+
+        return Response(
+            {
+                "action": IncidentActionSerializer(logged).data,
+                "affects_engine": kind is not None,
+                "applies_at_tick": tick,
+                "note": (
+                    "Applied to the live engine; takes effect on the next step."
+                    if kind is not None
+                    else "Recorded in the audit log. This decision is about the "
+                    "incident, not an instruction to the market."
+                ),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class NotYetImplemented(APIView):
+    """A route that exists so its phase only has to fill in the body."""
+
+    phase: int = 0
+    feature: str = ""
+
+    def _501(self) -> Response:
+        return Response(
+            {
+                "detail": (
+                    f"{self.feature} lands in Phase {self.phase}. The route, "
+                    f"serializer and test exist now; the engine logic does not yet."
+                ),
+                "phase": self.phase,
+            },
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
+
+
+class IncidentClassifyView(NotYetImplemented):
+    phase, feature = 8, "The Abnormal Price Event classifier"
+
+    def post(self, request: Request, code: str) -> Response:
+        _incident(code)
+        return self._501()
+
+
+class IncidentClaimsView(NotYetImplemented):
+    phase, feature = 9, "Computed claims with counterfactual equity"
+
+    def get(self, request: Request, code: str) -> Response:
+        _incident(code)
+        return self._501()
+
+
+class ClaimDecideView(APIView):
+    """A claim's decision is a state transition, independent of how it was
+    computed, so it works now on any Claim row -- including ones entered in the
+    admin -- and Phase 9 only has to start producing the rows."""
+
+    def post(self, request: Request, code: str, claim_id: int) -> Response:
+        incident = _incident(code)
+        claim = get_object_or_404(
+            Claim.objects.select_related("account"), pk=claim_id, incident=incident
+        )
+        req = ClaimDecisionSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        if data["decision"] == ClaimStatus.PAID and claim.status not in (
+            ClaimStatus.APPROVED,
+            ClaimStatus.AUTO_APPROVED,
+        ):
+            return _bad("Only an approved claim can be marked paid. Approve it first.")
+
+        claim.status = data["decision"]
+        if data["decision"] == ClaimStatus.APPROVED:
+            claim.approved_inr = (
+                data["approved_inr"] if data.get("approved_inr") is not None else claim.claimed_inr
+            )
+        if data["decision"] == ClaimStatus.REJECTED:
+            claim.approved_inr = 0
+        claim.reason = data["reason"]
+        claim.decided_by = data["decided_by"]
+        claim.decided_at = timezone.now()
+        claim.save()
+        return Response(ClaimSerializer(claim).data)
+
+
+class IncidentEvidenceView(APIView):
+    """GET /api/incidents/{code}/evidence/ -- the tape.
+
+    Built from the persisted frames: our mark, the composite we published and
+    the reconstructed Reference Composite, per tick. Phase 8 adds one row per
+    individual oracle source.
+    """
+
+    def get(self, request: Request, code: str) -> Response:
+        incident = _incident(code)
+        engine = runner.live_engine(incident)
+        rows = []
+        for f in engine.frames:
+            f = f.as_dict()
+            rows.append({
+                "tick": f["tick"], "source": "MOCHATRADE", "price": f["mark"],
+                "is_stale": False, "weight": 1.0, "excluded_reason": "",
+            })
+            rows.append({
+                "tick": f["tick"], "source": "COMPOSITE", "price": f["composite"],
+                "is_stale": f["composite"] is None, "weight": 1.0,
+                "excluded_reason": "" if f["composite"] else f["oracle_reason"],
+            })
+            rows.append({
+                "tick": f["tick"], "source": "REFERENCE", "price": f["reference"],
+                "is_stale": False, "weight": 1.0,
+                "excluded_reason": "reconstructed after the fact; never used for marking",
+            })
+        return Response(
+            {
+                "incident_code": code,
+                "ticks_recorded": len(engine.frames),
+                "observations": PriceObservationSerializer(rows, many=True).data,
+            }
+        )
+
+
+class IncidentCommsView(APIView):
+    def get(self, request: Request, code: str) -> Response:
+        incident = _incident(code)
+        return Response(CommsUpdateSerializer(incident.updates.all(), many=True).data)
+
+    def post(self, request: Request, code: str) -> Response:
+        incident = _incident(code)
+        req = CommsCreateSerializer(data=request.data)
+        if not req.is_valid():
+            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = req.validated_data
+
+        sequence = data.get("sequence") or (
+            (incident.updates.order_by("-sequence").values_list("sequence", flat=True).first() or 0)
+            + 1
+        )
+        if incident.updates.filter(sequence=sequence, channel=data["channel"]).exists():
+            return _bad(f"Update #{sequence} on {data['channel']} already exists.")
+
+        publish = data.get("is_published", True)
+        update = CommsUpdate.objects.create(
+            incident=incident,
+            sequence=sequence,
+            channel=data["channel"],
+            headline=data["headline"],
+            body=data["body"],
+            next_update_at=data.get("next_update_at"),
+            is_published=publish,
+            published_at=timezone.now() if publish else None,
+        )
+        if publish:
+            engine = runner.live_engine(incident)
+            IncidentAction.objects.create(
+                incident=incident,
+                tick=engine.tick,
+                actor=incident.comms_lead or "COMMS",
+                action_type=ActionType.PUBLISH_UPDATE,
+                params={"channel": update.channel, "sequence": update.sequence},
+                rationale=update.headline,
+            )
+        return Response(CommsUpdateSerializer(update).data, status=status.HTTP_201_CREATED)
+
+
+class IncidentReportView(APIView):
+    """GET /api/incidents/{code}/report/ -- the RCA payload.
+
+    Everything that exists is reported now. Classification and claims are
+    marked pending until Phases 8 and 9 compute them, rather than failing the
+    whole report because two sections are not built.
+    """
+
+    def get(self, request: Request, code: str) -> Response:
+        incident = _incident(code)
+        engine = runner.live_engine(incident)
+        summary = engine.result().summary.as_dict() if engine.frames else {}
+        return Response(
+            {
+                "incident": IncidentSerializer(incident).data,
+                "run": {
+                    "scenario_slug": incident.run.scenario.slug if incident.run else None,
+                    "policy_version": incident.run.policy.version if incident.run else None,
+                    "seed": incident.run.seed if incident.run else None,
+                    "current_tick": engine.tick,
+                    "summary": RunSummarySerializer(summary).data if summary else None,
+                },
+                "timeline": IncidentActionSerializer(
+                    incident.actions.order_by("tick", "id"), many=True
+                ).data,
+                "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
+                "classification": {"status": "pending", "phase": 8},
+                "claims": {"status": "pending", "phase": 9},
+            }
+        )
+
+
+# --------------------------------------------------------------------------
+# Public
+# --------------------------------------------------------------------------
+
+class PublicStatusView(APIView):
+    """GET /api/status/ -- the public status page. Published updates only."""
+
+    authentication_classes: list = []
+    permission_classes: list = []
+
+    def get(self, request: Request) -> Response:
+        qs = (
+            CommsUpdate.objects.filter(is_published=True)
+            .select_related("incident")
+            .order_by("-published_at", "-sequence")
+        )
+        return Response({"updates": PublicStatusUpdateSerializer(qs, many=True).data})

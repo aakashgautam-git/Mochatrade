@@ -20,3 +20,6 @@ web/dist/
 # Env
 .env
 .env.*
+
+# Local agent context. Mirrors ARCHITECTURE.md, which is the committed copy.
+CLAUDE.md

@@ -4,12 +4,12 @@ import { HowThisWorks } from "./components/HowThisWorks";
 import { ChartLegend, PriceChart } from "./components/PriceChart";
 import { StatTile } from "./components/StatTile";
 import { fetchComparison, fetchScenarios, rupees } from "./lib/api";
-import type { Comparison, ScenarioRow } from "./lib/types";
+import type { Comparison, ScenarioListItem } from "./lib/types";
 
 const DEFAULT_SLUG = "oracle_defect_hip3";
 
 export function App() {
-  const [scenarios, setScenarios] = useState<ScenarioRow[]>([]);
+  const [scenarios, setScenarios] = useState<ScenarioListItem[]>([]);
   const [slug, setSlug] = useState(DEFAULT_SLUG);
   const [data, setData] = useState<Comparison | null>(null);
   const [error, setError] = useState<string | null>(null);

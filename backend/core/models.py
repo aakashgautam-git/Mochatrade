@@ -537,6 +537,17 @@ class SimRun(models.Model):
         default=True, help_text="The off-vs-on proof: identical shock, stack off or on."
     )
     seed = models.BigIntegerField()
+    policy_fingerprint = models.CharField(
+        max_length=32,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Hash of the parameter values this run actually executed against. "
+            "Part of the cache key, because editing a margin tier does not bump "
+            "RiskPolicy.version -- keying on the version alone would serve a "
+            "stale run after a policy edit and quietly contradict the admin."
+        ),
+    )
     created_at = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=12, choices=RunStatus.choices, default=RunStatus.PENDING)
     current_tick = models.PositiveIntegerField(default=0)
@@ -549,6 +560,12 @@ class SimRun(models.Model):
     class Meta:
         ordering = ("-created_at",)
         verbose_name = "simulation run"
+        indexes = [
+            models.Index(
+                fields=["scenario", "controls_enabled", "seed", "policy_fingerprint"],
+                name="core_simrun_cachekey_idx",
+            )
+        ]
 
     def __str__(self) -> str:
         stack = "controls ON" if self.controls_enabled else "controls OFF"

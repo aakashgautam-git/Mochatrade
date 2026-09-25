@@ -45,8 +45,10 @@ web: ## Run the Vite dev server only
 migrate: ## Apply migrations
 	cd backend && .venv/bin/python manage.py migrate
 
-seed: ## Seed the RiskPolicy defaults and the scenario library
+seed: ## Seed the policy and scenarios, then pre-run every scenario both ways
 	cd backend && .venv/bin/python manage.py seed_policy
+	cd backend && .venv/bin/python manage.py seed_scenarios
+	cd backend && .venv/bin/python manage.py warm_runs
 
 test: ## Run the full pytest suite
 	cd backend && .venv/bin/pytest

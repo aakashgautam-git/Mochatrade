@@ -61,7 +61,7 @@ cd web && npm install && npm run dev
 | `make test` | pytest suite, including the determinism and engine-purity tests |
 | `make typecheck` | TypeScript strict check |
 | `make build` | Production build of the web app |
-| `make seed` | Seed `RiskPolicy` defaults and the scenario library |
+| `make seed` | Seed the policy and scenarios, then pre-run all twelve comparisons |
 | `make clean` | Remove venv, node_modules, caches and the local database |
 
 ---
