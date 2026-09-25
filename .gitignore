@@ -23,3 +23,6 @@ web/dist/
 
 # Local agent context. Mirrors ARCHITECTURE.md, which is the committed copy.
 CLAUDE.md
+
+# Review screenshots from the headless browser; regenerated, not versioned.
+docs/screenshots/

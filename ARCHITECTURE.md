@@ -10,14 +10,15 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 
 ## Current phase
 
-> **PHASE 4 — API LAYER (complete).** 18 DRF routes over the engine. Every
-> engine instantiation goes through the active `RiskPolicy.to_params()`, and a
-> test fails the build if anything else constructs parameters. Runs are
-> persisted and served from the database; a policy edit invalidates them.
-> `make seed` pre-warms all twelve runs. The screening-round demo still works,
-> now served from cache. 254 tests green.
+> **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
+> `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
+> app shell (rail, top bar, system-state pill, IST clock), a document palette
+> for Report and Playbook, and `/kitchen-sink` rendering everything. Verified in
+> a real headless browser: 60/60 Tab stops show a 2px focus ring, zero layout
+> shift while stats count, and contrast measured live in both palettes. The
+> screening demo lives on at `/demo` (standalone) and `/` (inside the shell).
 >
-> **NEXT: PHASE 5 — Design system.** Await instructions before starting.
+> **NEXT: PHASE 6 — Simulator surface.** Await instructions before starting.
 
 Phases are numbered by the project plan, not by build order: the risk engine
 (3) was built before the Django layer (2) because everything downstream needs a
@@ -30,8 +31,8 @@ trustworthy engine more than it needs a database.
 | 2 | Django models + admin | Done |
 | 3 | Risk engine — pure-Python core + tests | Done |
 | 4 | REST API | Done |
-| 5 | Design system | **Next** |
-| 6 | Simulator surface | Not started |
+| 5 | Design system | Done |
+| 6 | Simulator surface | **Next** |
 | 7 | War room | Not started |
 | 8 | Forensics | Not started |
 | 9 | Remediation — claims, make-whole, pro-rata cap overflow | Not started |
@@ -267,6 +268,25 @@ price, quantity, percentage and countdown uses the mono face with
 `font-variant-numeric: tabular-nums` so digits never jitter during animation.
 Use the `.num` class.
 
+### Semantic tokens — `web/src/styles/semantic.css`
+
+Derived from `tokens.css` by `color-mix`; no new hex values.
+
+- **Never put a Tailwind opacity modifier on a token colour.** `bg-pos/10` and
+  `border-neg/30` are silently dropped: Tailwind cannot inject alpha into an
+  opaque `var(--pos)`. Use `bg-pos-soft`, `border-pos-edge`, `text-pos-fg`.
+  (The screening demo's delta chips have never had their tints for this reason.)
+- **Text on a tint uses the `-fg` tokens.** Raw `--halt` fails as text (4.13:1);
+  every `-fg` on its own tint measures 5.3–7.1:1 in both palettes.
+- **Solid fills come in pairs that invert per palette**: `accent-solid` /
+  `on-accent-solid`, `halt-solid` / `on-halt-solid`. The naive pairs pass dark
+  and fail light, and the top bar is visible on the light document pages.
+- **`--text-faint` fails AA for text** (2.93:1 on surface dark, 3.85:1 light).
+  Use it for rules and disabled states only. Proposed replacement value:
+  `#8C827A` (4.65:1 on surface, 5.00:1 on page) — awaiting approval.
+- After editing `tailwind.config.js`, **restart Vite**. The dev server does not
+  reload the config, so new colour classes silently fail to generate.
+
 ### Layout, motion, accessibility
 
 - 8px spacing grid. Tailwind's stock scale is a 4px grid — use even steps only
@@ -276,9 +296,26 @@ Use the `.num` class.
 - Generous whitespace. Density comes from good typography, not from cramming.
 - Motion: 150–200ms ease-out only. No spring bounce, no scale-on-hover above
   1.02. Numbers transition by **counting**, not by fading. Respect
-  `prefers-reduced-motion`.
+  `prefers-reduced-motion`. One deliberate exception: a count runs 400ms
+  (`COUNT_MS`), because a 200ms count reads as a flicker. Skeletons are static;
+  the only loop is the button spinner, and it stops under reduced motion.
 - Every state that uses colour also uses a label or a shape. Text contrast
   ≥ 4.5:1 against its surface.
+
+### The shell
+
+- **Routing is a 60-line history router** (`web/src/app/router.tsx`), not a
+  dependency. `/demo` is the screening page standalone; `/` embeds it inside
+  the shell until Phase 6.
+- **The system-state pill** changes colour, words and icon together, with a
+  2px band across the top of the viewport for any non-normal state. LIQ PAUSED
+  and HALTED share `--halt` (reserved for interventions) and differ by
+  treatment: a pause is a tint, a halt is the one solid fill in the interface.
+- **Chart colours** are read from the live tokens by `useChartTheme`, which
+  re-reads on `data-theme` changes, so charts follow the document palette.
+- **Control activity on the PriceChart is a lane above the plot**, one segment
+  per real span. Full-height shading either striped the chart or, merged,
+  claimed eleven minutes of intervention where there were 56 five-second pauses.
 
 ---
 

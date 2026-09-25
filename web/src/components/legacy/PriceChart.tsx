@@ -8,7 +8,7 @@ import {
   YAxis,
 } from "recharts";
 
-import type { SeriesPoint } from "../lib/types";
+import type { SeriesPoint } from "../../lib/types";
 
 interface Props {
   title: string;

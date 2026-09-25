@@ -1,0 +1,75 @@
+/* Component-level CSS that utility classes cannot express: native control
+ * internals, one entrance keyframe, and the skip link. */
+
+/* ---- range input ----------------------------------------------------- */
+.ui-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.ui-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  /* A two-stop fill, not a decorative gradient: accent up to the value. */
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 0%),
+    var(--surface-2) var(--fill, 0%) 100%
+  );
+}
+.ui-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: var(--text);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--line);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.ui-range:hover::-webkit-slider-thumb { transform: scale(1.02); }
+.ui-range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--surface-2); }
+.ui-range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--accent); }
+.ui-range::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 999px;
+  background: var(--text); border: 3px solid var(--bg);
+}
+.ui-range:disabled { cursor: not-allowed; opacity: 0.4; }
+.ui-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 6px; }
+
+/* ---- native select: the open menu is the OS's, the closed control is ours */
+.ui-select option { background: var(--surface); color: var(--text); }
+
+/* ---- toast entrance: one 200ms ease-out, disabled by reduced motion ---- */
+@keyframes ui-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ui-toast { animation: ui-toast-in var(--dur-base) var(--ease); }
+
+/* ---- spinner: the one continuous motion, and it stops for reduced motion */
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+.ui-spin { animation: ui-spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { .ui-spin { animation: none; } }
+
+/* ---- skip link --------------------------------------------------------- */
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 16px;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 14px;
+  font-weight: 500;
+}
+.skip-link:focus-visible { top: 12px; }
+
+::selection { background: var(--accent-soft); color: var(--text); }

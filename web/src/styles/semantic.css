@@ -1,0 +1,65 @@
+/* Semantic tokens, derived from tokens.css. No new hex values: every colour
+ * here is a color-mix of an existing token.
+ *
+ * Why this file exists. Two things the base tokens cannot do on their own:
+ *
+ * 1. Tinted surfaces. Tailwind silently drops opacity modifiers (bg-pos/10) on
+ *    colours defined as var(--pos), because it cannot inject alpha into an
+ *    opaque custom property. The -soft and -edge tokens are the tints, spelled
+ *    out. Never use an opacity modifier on a token colour.
+ *
+ * 2. Readable text on those tints. A tint raises the background's luminance,
+ *    which costs the raw tokens contrast; and --halt fails as text even on the
+ *    plain surface (measured 4.13:1). The -fg tokens lift each hue toward the
+ *    text colour until text on its own tint passes 4.5:1 (measured 6.07-6.84:1),
+ *    while staying recognisably the same hue.
+ *
+ * Contrast is measured live on /kitchen-sink, not asserted here.
+ */
+
+:root {
+  --pos-fg: color-mix(in srgb, var(--pos) 80%, white);
+  --neg-fg: color-mix(in srgb, var(--neg) 70%, white);
+  --warn-fg: color-mix(in srgb, var(--warn) 88%, white);
+  --halt-fg: color-mix(in srgb, var(--halt) 55%, white);
+  --accent-fg: color-mix(in srgb, var(--accent) 85%, white);
+
+  --pos-soft: color-mix(in srgb, var(--pos) 14%, transparent);
+  --neg-soft: color-mix(in srgb, var(--neg) 14%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+  --halt-soft: color-mix(in srgb, var(--halt) 18%, transparent);
+
+  --pos-edge: color-mix(in srgb, var(--pos) 40%, transparent);
+  --neg-edge: color-mix(in srgb, var(--neg) 40%, transparent);
+  --warn-edge: color-mix(in srgb, var(--warn) 40%, transparent);
+  --halt-edge: color-mix(in srgb, var(--halt) 50%, transparent);
+  --accent-edge: color-mix(in srgb, var(--accent) 40%, transparent);
+
+  /* Solid fills and the text that sits on them, paired so they invert
+     together per palette. Measured in both palettes on /kitchen-sink: the
+     obvious choice -- --text on --halt, --bg on --accent -- passes dark and
+     fails light (2.63:1 and 4.01:1), which matters because the top bar and its
+     HALTED pill are visible on the light Report and Playbook pages. */
+  --halt-solid: color-mix(in srgb, var(--halt) 70%, black);
+  --on-halt-solid: var(--text);
+  --accent-solid: var(--accent);
+  --on-accent-solid: var(--bg);
+}
+
+:root[data-theme="light"] {
+  --pos-fg: color-mix(in srgb, var(--pos) 88%, black);
+  --neg-fg: color-mix(in srgb, var(--neg) 85%, black);
+  --warn-fg: color-mix(in srgb, var(--warn) 68%, black);
+  --halt-fg: color-mix(in srgb, var(--halt) 85%, black);
+  --accent-fg: color-mix(in srgb, var(--accent) 78%, black);
+
+  --pos-soft: color-mix(in srgb, var(--pos) 10%, transparent);
+  --neg-soft: color-mix(in srgb, var(--neg) 10%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 12%, transparent);
+  --halt-soft: color-mix(in srgb, var(--halt) 10%, transparent);
+
+  --halt-solid: var(--halt);
+  --on-halt-solid: var(--bg);
+  --accent-solid: color-mix(in srgb, var(--accent) 80%, black);
+  --on-accent-solid: var(--bg);
+}
