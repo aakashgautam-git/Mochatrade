@@ -23,6 +23,7 @@ from core.models import (
     Incident,
     IncidentAction,
     PolicyMarginTier,
+    PriceObservation,
     RiskPolicy,
     SimAccount,
     SimRun,
@@ -517,3 +518,61 @@ def test_no_serializer_uses_all_fields() -> None:
         for node in ast.walk(tree) if isinstance(node, ast.Assign)
         for t in node.targets
     }, "use an explicit field list, not exclude"
+
+
+# --------------------------------------------------------------------------
+# The persisted evidence tape (pre-Phase-5)
+# --------------------------------------------------------------------------
+
+def test_a_completed_run_writes_its_tape(api, seeded) -> None:
+    """Per tick: every oracle source, plus our mark, the published composite and
+    the reconstructed Reference Composite."""
+    body = post(api, "/api/runs/", {"scenario_slug": "oracle_defect_hip3", "controls_enabled": False}).json()
+    run = SimRun.objects.get(pk=body["run_id"])
+    rows = PriceObservation.objects.filter(run=run)
+    assert rows.count() == run.total_ticks * (6 + 3)
+    assert rows.filter(source="REFERENCE", rung__isnull=True).count() == run.total_ticks
+
+    clamped = rows.filter(source="ADR", clamped=True)
+    assert clamped.exists()
+    row = clamped.order_by("tick").first()
+    assert row.raw_price > row.price  # the honest source, dragged down by the median
+
+
+def test_a_closed_market_is_stored_with_no_price(api, seeded) -> None:
+    body = post(api, "/api/runs/", {"scenario_slug": "offhours_equity_wick"}).json()
+    cash = PriceObservation.objects.filter(run_id=body["run_id"], source="US_CASH")
+    assert cash.count() == 600
+    assert not cash.exclude(price__isnull=True).exists()
+    assert "closed" in cash.first().excluded_reason
+
+
+def test_ticks_on_the_wire_carry_the_sources(api, seeded) -> None:
+    body = post(api, "/api/runs/", {"scenario_slug": "offhours_equity_wick"}).json()
+    sources = body["ticks"][10]["sources"]
+    assert [s["source"] for s in sources][0] == "us_cash_market"
+    assert sources[0]["price"] is None
+
+
+def test_frame_schema_is_part_of_the_cache_key(api, seeded, monkeypatch) -> None:
+    """A run stored before a frame field existed must not be served as though it
+    had that field."""
+    first = post(api, "/api/runs/", {"scenario_slug": "broker_outage"}).json()
+    monkeypatch.setattr(runner, "FRAME_SCHEMA", runner.FRAME_SCHEMA + 1)
+    second = post(api, "/api/runs/", {"scenario_slug": "broker_outage"}).json()
+    assert second["cache"] == "miss"
+    assert second["run_id"] != first["run_id"]
+
+
+def test_stepped_runs_extend_the_tape_without_duplicates(api, seeded) -> None:
+    """Incremental writes, including across a silent rebuild after a restart."""
+    code = declare(api, slug="oracle_defect_hip3")
+    run = Incident.objects.get(code=code).run
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 25})
+    assert PriceObservation.objects.filter(run=run).count() == 25 * 9
+
+    runner._LIVE.clear()
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 15})
+    rows = PriceObservation.objects.filter(run=run)
+    assert rows.count() == 40 * 9
+    assert rows.values("tick", "source").distinct().count() == 40 * 9

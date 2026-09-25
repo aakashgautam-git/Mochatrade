@@ -392,13 +392,50 @@ class ActionType(models.TextChoices):
 
 
 class PriceSource(models.TextChoices):
+    """Every price that can appear on the evidence tape.
+
+    COMPOSITE and REFERENCE are different numbers and the distinction is the
+    whole of a class C claim: COMPOSITE is what MochaTrade published and marked
+    against at the time, defects included; REFERENCE is the same ladder rebuilt
+    afterwards from unfaulted sources.
+    """
+
     MOCHATRADE = "MOCHATRADE", "MochaTrade mark"
+    COMPOSITE = "COMPOSITE", "Published composite (live)"
+    REFERENCE = "REFERENCE", "Reference Composite (reconstructed)"
+    # L1 -- spot venues and the US cash market
     BINANCE = "BINANCE", "Binance spot"
     OKX = "OKX", "OKX spot"
     COINBASE = "COINBASE", "Coinbase spot"
+    KRAKEN = "KRAKEN", "Kraken spot"
     US_CASH = "US_CASH", "US cash market"
+    # L2 -- index futures, ETF NAV, ADRs
     ES_FUT = "ES_FUT", "ES future"
-    COMPOSITE = "COMPOSITE", "Reference Composite"
+    ETF_NAV = "ETF_NAV", "ETF NAV proxy"
+    ADR = "ADR", "ADR line"
+    # L3 -- independent perp venues
+    HYPERLIQUID = "HYPERLIQUID", "Hyperliquid perp"
+    BYBIT = "BYBIT", "Bybit perp"
+    TRADE_XYZ = "TRADE_XYZ", "trade.xyz perp"
+    OSTIUM = "OSTIUM", "Ostium perp"
+
+
+#: riskengine source names -> the tape's vocabulary. The engine stays unaware
+#: of Django's choices; this is the one place the two meet.
+ENGINE_SOURCE: dict[str, str] = {
+    "binance_spot": PriceSource.BINANCE,
+    "okx_spot": PriceSource.OKX,
+    "coinbase_spot": PriceSource.COINBASE,
+    "kraken_spot": PriceSource.KRAKEN,
+    "us_cash_market": PriceSource.US_CASH,
+    "es_future": PriceSource.ES_FUT,
+    "etf_nav_proxy": PriceSource.ETF_NAV,
+    "adr_line": PriceSource.ADR,
+    "hyperliquid_perp": PriceSource.HYPERLIQUID,
+    "bybit_perp": PriceSource.BYBIT,
+    "trade_xyz_perp": PriceSource.TRADE_XYZ,
+    "ostium_perp": PriceSource.OSTIUM,
+}
 
 
 class ClaimStatus(models.TextChoices):
@@ -629,9 +666,34 @@ class PriceObservation(models.Model):
     run = models.ForeignKey(SimRun, on_delete=models.CASCADE, related_name="observations")
     tick = models.PositiveIntegerField()
     source = models.CharField(max_length=16, choices=PriceSource.choices)
-    price = models.DecimalField(max_digits=20, decimal_places=6)
+    rung = models.PositiveSmallIntegerField(
+        null=True, blank=True, help_text="Composite ladder rung 1-3; blank for derived prices."
+    )
+    price = models.DecimalField(
+        max_digits=20,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text=(
+            "The price the composite used, after the outlier clamp. Blank when "
+            "the source printed nothing -- a closed market or an unreachable "
+            "venue -- and for the composite itself at ladder L4."
+        ),
+    )
+    raw_price = models.DecimalField(
+        max_digits=20,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="What the source actually printed. The gap to `price` is the clamp.",
+    )
     is_stale = models.BooleanField(default=False)
-    weight = models.FloatField(default=1.0)
+    weight = models.FloatField(
+        default=1.0,
+        help_text="Effective weight this tick: zero when excluded, per Binance's staleness rule.",
+    )
+    used = models.BooleanField(default=False, help_text="Fed the published composite this tick.")
+    clamped = models.BooleanField(default=False, help_text="Capped against the median.")
     excluded_reason = models.CharField(
         max_length=160,
         blank=True,

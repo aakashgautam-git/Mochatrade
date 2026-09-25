@@ -140,6 +140,26 @@ export interface ScenarioDetail extends ScenarioListItem {
 // Runs
 // ---------------------------------------------------------------------------
 
+/**
+ * One oracle source's part in one tick's composite. `price` is what the
+ * composite used after the outlier clamp; `raw_price` is what the source
+ * printed; the gap is the clamp. Both are null when the source printed nothing
+ * -- a closed market or an unreachable venue. `weight` is zero exactly when the
+ * source did not feed the composite, and `excluded_reason` says why.
+ */
+export interface SourceObservation {
+  source: string;
+  kind: string;
+  rung: number;
+  price: number | null;
+  raw_price: number | null;
+  weight: number;
+  is_stale: boolean;
+  used: boolean;
+  clamped: boolean;
+  excluded_reason: string;
+}
+
 export interface Tick {
   tick: number;
   t_seconds: number;
@@ -168,6 +188,7 @@ export interface Tick {
   unnecessary_liquidations: number;
   accounts_open: number;
   aggregate_equity: number;
+  sources: SourceObservation[];
 }
 
 export interface RunSummary {

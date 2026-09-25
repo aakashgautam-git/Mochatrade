@@ -30,6 +30,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    # Tick series with per-source oracle observations run to ~2.8 MB per
+    # comparison, highly repetitive JSON. Built into Django, no new dependency.
+    "django.middleware.gzip.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

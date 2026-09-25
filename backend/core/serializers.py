@@ -136,6 +136,21 @@ class ScenarioDetailSerializer(ScenarioListSerializer):
 # Runs
 # --------------------------------------------------------------------------
 
+class SourceObservationSerializer(serializers.Serializer):
+    """One oracle source's part in one tick's composite."""
+
+    source = serializers.CharField()
+    kind = serializers.CharField()
+    rung = serializers.IntegerField()
+    price = serializers.FloatField(allow_null=True)
+    raw_price = serializers.FloatField(allow_null=True)
+    weight = serializers.FloatField()
+    is_stale = serializers.BooleanField()
+    used = serializers.BooleanField()
+    clamped = serializers.BooleanField()
+    excluded_reason = serializers.CharField(allow_blank=True)
+
+
 class TickSerializer(serializers.Serializer):
     """One frame. Numeric on purpose -- see the money note in the module docstring."""
 
@@ -166,6 +181,7 @@ class TickSerializer(serializers.Serializer):
     unnecessary_liquidations = serializers.IntegerField()
     accounts_open = serializers.IntegerField()
     aggregate_equity = serializers.FloatField()
+    sources = SourceObservationSerializer(many=True, default=list)
 
 
 class RunSummarySerializer(serializers.Serializer):

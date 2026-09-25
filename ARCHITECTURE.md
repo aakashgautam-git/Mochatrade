@@ -196,6 +196,19 @@ policy_fingerprint)`. The fingerprint hashes the actual parameter VALUES, not
 version-keyed cache would serve a stale run that contradicts the admin.
 Reverting an edit restores the old fingerprint and hits the original runs.
 
+### The evidence tape
+
+Every frame carries `sources`: one `SourceObservation` per oracle source with
+the price the composite used, the raw price the source printed, its effective
+weight (zero when excluded), whether it was clamped, and why it was excluded.
+Closed and unreachable sources record no price rather than a live-looking one.
+Persisted runs write the same data into `PriceObservation`, alongside three
+derived rows per tick: our mark, the published composite, and the
+reconstructed Reference Composite. `riskengine.engine.FRAME_SCHEMA` is part of
+the run cache key, so adding a frame field invalidates stored runs instead of
+serving them without it. Responses are gzipped; a full comparison is ~280 KB on
+the wire.
+
 ### Live engines
 
 War-room incidents step a live `Engine` held in `runner._LIVE`, keyed by

@@ -31,14 +31,25 @@ from dataclasses import asdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from riskengine.controls import ActionKind, ControlStack, OperatorAction
-from riskengine.engine import Engine
+from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
 from riskengine.scenario import by_key
 
-from .models import ActionType, RiskPolicy, RunStatus, Scenario, SimRun
+from .models import (
+    ENGINE_SOURCE,
+    ActionType,
+    PriceObservation,
+    PriceSource,
+    RiskPolicy,
+    RunStatus,
+    Scenario,
+    SimRun,
+)
 
 
 class PolicyUnavailable(RuntimeError):
@@ -71,12 +82,15 @@ def params_for(policy: RiskPolicy):
 
 
 def fingerprint(params: Any) -> str:
-    """A stable hash of every parameter value the engine will actually see.
+    """A stable hash of everything that determines a stored run's contents.
 
-    Deliberately over the values and not the version string: a policy edit that
-    leaves the version alone still has to invalidate every cached run.
+    Two inputs. The parameter VALUES, not the version string -- a policy edit
+    that leaves the version alone still has to invalidate every cached run. And
+    the engine's FRAME_SCHEMA -- a run stored before a frame field existed must
+    not be served as though it had that field.
     """
-    blob = json.dumps(asdict(params), sort_keys=True, separators=(",", ":"), default=str)
+    payload = {"frame_schema": FRAME_SCHEMA, "params": asdict(params)}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
 
 
@@ -143,20 +157,78 @@ def get_or_run(
     result = Engine(
         scenario, params, control_stack(controls_enabled), seed=effective_seed
     ).run()
+    frames = [f.as_dict() for f in result.frames]
 
-    run = SimRun.objects.create(
-        scenario=row,
-        policy=policy,
-        controls_enabled=controls_enabled,
-        seed=effective_seed,
-        policy_fingerprint=print_key,
-        status=RunStatus.DONE,
-        current_tick=len(result.frames),
-        total_ticks=len(result.frames),
-        result_summary=result.summary.as_dict(),
-        tick_data=[f.as_dict() for f in result.frames],
-    )
+    # One transaction: a DONE run without its tape would be served from the
+    # cache forever with an empty evidence trail.
+    with transaction.atomic():
+        run = SimRun.objects.create(
+            scenario=row,
+            policy=policy,
+            controls_enabled=controls_enabled,
+            seed=effective_seed,
+            policy_fingerprint=print_key,
+            status=RunStatus.DONE,
+            current_tick=len(frames),
+            total_ticks=len(frames),
+            result_summary=result.summary.as_dict(),
+            tick_data=frames,
+        )
+        write_observations(run, frames)
     return run, True
+
+
+# --------------------------------------------------------------------------
+# The evidence tape
+# --------------------------------------------------------------------------
+
+def _dec(value: Any) -> Decimal | None:
+    return None if value is None else Decimal(repr(float(value)))
+
+
+def observation_rows(run: SimRun, frames: list[dict]) -> list[PriceObservation]:
+    """Per tick: every oracle source, then the three derived prices -- our mark,
+    the composite we published, and the Reference Composite rebuilt afterwards.
+    Derived rows carry no rung, which is how the tape tells them apart."""
+    rows: list[PriceObservation] = []
+    for f in frames:
+        tick = f["tick"]
+        for o in f.get("sources") or ():
+            rows.append(
+                PriceObservation(
+                    run=run,
+                    tick=tick,
+                    source=ENGINE_SOURCE.get(o["source"], o["source"].upper()[:16]),
+                    rung=o["rung"],
+                    price=_dec(o["price"]),
+                    raw_price=_dec(o["raw_price"]),
+                    is_stale=o["is_stale"],
+                    weight=o["weight"],
+                    used=o["used"],
+                    clamped=o["clamped"],
+                    excluded_reason=o["excluded_reason"],
+                )
+            )
+        rows.append(PriceObservation(
+            run=run, tick=tick, source=PriceSource.MOCHATRADE,
+            price=_dec(f["mark"]), weight=0.0,
+        ))
+        rows.append(PriceObservation(
+            run=run, tick=tick, source=PriceSource.COMPOSITE,
+            price=_dec(f["composite"]), weight=0.0,
+            excluded_reason="" if f["composite"] is not None else f["oracle_reason"][:160],
+        ))
+        rows.append(PriceObservation(
+            run=run, tick=tick, source=PriceSource.REFERENCE,
+            price=_dec(f["reference"]), weight=0.0,
+        ))
+    return rows
+
+
+def write_observations(run: SimRun, frames: list[dict]) -> int:
+    rows = observation_rows(run, frames)
+    PriceObservation.objects.bulk_create(rows, batch_size=5000)
+    return len(rows)
 
 
 # --------------------------------------------------------------------------
@@ -233,23 +305,29 @@ def forget_engine(code: str) -> None:
 
 
 def persist_live(incident, engine: Engine) -> None:
-    """Checkpoint a stepped run so a restart can rebuild it."""
+    """Checkpoint a stepped run so a restart can rebuild it, and extend its
+    evidence tape by exactly the ticks not yet written -- never re-writing the
+    ones already there, including after a rebuild."""
     run = incident.run
+    written = PriceObservation.objects.filter(run=run).aggregate(m=Max("tick"))["m"]
+    fresh = [f.as_dict() for f in engine.frames if written is None or f.tick > written]
     run.current_tick = engine.tick
     run.total_ticks = engine.scenario.n_ticks
     run.tick_data = [f.as_dict() for f in engine.frames]
     run.status = RunStatus.DONE if engine.finished else RunStatus.RUNNING
     if engine.finished:
         run.result_summary = engine.result().summary.as_dict()
-    run.save(
-        update_fields=[
-            "current_tick",
-            "total_ticks",
-            "tick_data",
-            "status",
-            "result_summary",
-        ]
-    )
+    with transaction.atomic():
+        run.save(
+            update_fields=[
+                "current_tick",
+                "total_ticks",
+                "tick_data",
+                "status",
+                "result_summary",
+            ]
+        )
+        write_observations(run, fresh)
 
 
 def start_stepped_run(

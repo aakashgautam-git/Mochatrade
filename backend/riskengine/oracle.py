@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Sequence
 
-from .params import RiskParams
+from .params import TICK_SECONDS, RiskParams
 from .rng import Rng
 
 
@@ -155,6 +155,11 @@ class SourceReading:
     used: bool = False
     """True if this reading fed the composite that was published this tick."""
 
+    closed: bool = False
+    """The venue is outside its trading session -- the US cash market at 04:00
+    IST. Distinct from `down`: a closed market is published structure, a down
+    source is a failure, and the evidence tape has to say which."""
+
     @property
     def contributed(self) -> bool:
         return self.used
@@ -237,6 +242,7 @@ class OracleFeed:
                 self._last_update[source.name] = tick
                 self._last_price[source.name] = price
 
+            closed = fault is not None and fault.kind is FaultKind.CLOSED
             live.append(
                 SourceReading(
                     name=source.name,
@@ -250,10 +256,10 @@ class OracleFeed:
                     down=down,
                     clamped=False,
                     faulted=faulted,
+                    closed=closed,
                 )
             )
 
-            closed = fault is not None and fault.kind is FaultKind.CLOSED
             reference.append(
                 SourceReading(
                     name=source.name,
@@ -267,6 +273,7 @@ class OracleFeed:
                     down=closed,
                     clamped=False,
                     faulted=False,
+                    closed=closed,
                 )
             )
 
@@ -280,6 +287,25 @@ def _median(values: Sequence[float]) -> float:
     if n % 2 == 1:
         return ordered[mid]
     return 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
+def quorum(rung: int, candidates: Sequence[SourceReading], params: RiskParams) -> int:
+    """Live sources a rung needs before it may set the price.
+
+    The brief defines L1 as ">=3 major spot venues (crypto) OR the US cash
+    market (equities, RTH)". The cash market is one authoritative venue, not
+    three correlated ones, so the quorum it has to meet is one. Using the crypto
+    minimum for an equity perp means L1 can never form and the composite sits
+    permanently below its published rung.
+    """
+    minimums = {
+        1: params.composite_l1_min_sources,
+        2: params.composite_l2_min_sources,
+        3: params.composite_l3_min_sources,
+    }
+    if rung == 1 and candidates and all(r.kind is SourceKind.CASH_MARKET for r in candidates):
+        return 1
+    return minimums[rung]
 
 
 def build_composite(
@@ -311,11 +337,6 @@ def build_composite(
     losses into our insolvency. "Abnormal" is defined against a published
     baseline, never against whatever is convenient.
     """
-    minimums = {
-        1: params.composite_l1_min_sources,
-        2: params.composite_l2_min_sources,
-        3: params.composite_l3_min_sources,
-    }
     clamp = params.clamp_pct_for(is_major=majors)
     stale_after = params.staleness_ticks
 
@@ -334,6 +355,7 @@ def build_composite(
             down=r.down,
             clamped=False,
             faulted=r.faulted,
+            closed=r.closed,
         )
         for r in readings
     ]
@@ -341,15 +363,7 @@ def build_composite(
 
     for rung in (1, 2, 3):
         candidates = [r for r in live if r.rung == rung]
-        # The brief defines L1 as ">=3 major spot venues (crypto) OR the US cash
-        # market (equities, RTH)". The cash market is one authoritative venue,
-        # not three correlated ones, so the quorum it has to meet is one. Using
-        # the crypto minimum for an equity perp means L1 can never form and the
-        # composite sits permanently below its published rung.
-        required = minimums[rung]
-        if rung == 1 and all(r.kind is SourceKind.CASH_MARKET for r in candidates):
-            required = 1
-        if len(candidates) < required:
+        if len(candidates) < quorum(rung, candidates, params):
             continue
 
         median = _median([r.used_price for r in candidates])
@@ -376,6 +390,7 @@ def build_composite(
                 clamped=was_clamped,
                 faulted=r.faulted,
                 used=True,
+                closed=r.closed,
             )
 
         chosen = tuple(selected.values())
@@ -428,3 +443,86 @@ def build_composite(
             "(3x max leverage, reduce-only, liquidations paused)"
         ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceObservation:
+    """One source's part in one tick's composite, as the evidence tape records it.
+
+    `price` is what the composite used -- after the outlier clamp -- and
+    `raw_price` is what the source actually printed; the gap between them IS
+    the clamp. `weight` is the effective weight this tick: the configured weight
+    if the source fed the composite, zero otherwise, which is Binance's
+    staleness rule made literal.
+    """
+
+    source: str
+    kind: str
+    rung: int
+    price: float | None
+    """None when the source printed nothing this tick -- closed or unreachable.
+    A tape that shows a closed market "printing" a price would mislead exactly
+    the reader it exists for."""
+
+    raw_price: float | None
+    weight: float
+    is_stale: bool
+    used: bool
+    clamped: bool
+    excluded_reason: str
+
+
+def observations(
+    composite: Composite, params: RiskParams, *, tick: int
+) -> tuple[SourceObservation, ...]:
+    """Every source's contribution to this tick's composite, with a reason for
+    each exclusion that a user could check against the published ladder."""
+    live_by_rung: dict[int, list[SourceReading]] = {}
+    for r in composite.readings:
+        if not (r.down or r.stale):
+            live_by_rung.setdefault(r.rung, []).append(r)
+
+    out: list[SourceObservation] = []
+    for r in composite.readings:
+        if r.used:
+            reason = ""
+        elif r.closed:
+            reason = "market closed -- outside its trading session"
+        elif r.down:
+            reason = "source unreachable"
+        elif r.stale:
+            age = int((tick - r.last_update_tick) * TICK_SECONDS)
+            reason = (
+                f"stale -- no update for {age}s; weight zeroed at "
+                f"{params.staleness_seconds}s"
+            )
+        elif composite.rung >= 4:
+            live = live_by_rung.get(r.rung, [])
+            reason = (
+                f"L{r.rung} short of quorum ({len(live)} of "
+                f"{quorum(r.rung, live, params)} live); no rung formed a composite"
+            )
+        elif r.rung < composite.rung:
+            live = live_by_rung.get(r.rung, [])
+            reason = (
+                f"L{r.rung} short of quorum ({len(live)} of "
+                f"{quorum(r.rung, live, params)} live); composite fell to L{composite.rung}"
+            )
+        else:
+            reason = f"L{r.rung} not needed; composite formed on L{composite.rung}"
+
+        out.append(
+            SourceObservation(
+                source=r.name,
+                kind=r.kind.value,
+                rung=r.rung,
+                price=None if r.down else r.used_price,
+                raw_price=None if r.down else r.raw_price,
+                weight=r.weight if r.used else 0.0,
+                is_stale=r.stale,
+                used=r.used,
+                clamped=r.clamped,
+                excluded_reason=reason,
+            )
+        )
+    return tuple(out)

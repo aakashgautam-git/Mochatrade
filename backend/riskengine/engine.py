@@ -49,10 +49,22 @@ from .liquidation import (
     LiquidationOutcome,
 )
 from .marking import MarkCalculator, MarkResult
-from .oracle import Composite, OracleFeed, OracleHealth, build_composite
+from .oracle import (
+    Composite,
+    OracleFeed,
+    OracleHealth,
+    SourceObservation,
+    build_composite,
+    observations,
+)
 from .params import TICK_SECONDS, RiskParams
 from .rng import Rng
 from .scenario import Scenario
+
+#: Version of the Frame's shape. Anything that persists frames must include it
+#: in its cache key: a run stored before a field existed must not be served as
+#: if it had that field. 2 = per-source oracle observations.
+FRAME_SCHEMA = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +115,10 @@ class Frame:
     accounts_open: int
     aggregate_equity: float
     log: tuple[str, ...] = ()
+    sources: tuple[SourceObservation, ...] = ()
+    """Every oracle source's part in this tick's composite: the price it
+    printed, the price the composite used, its effective weight, and why it was
+    excluded if it was. The evidence tape a class C claim is decided from."""
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -568,6 +584,7 @@ class Engine:
             accounts_open=len(open_accounts),
             aggregate_equity=math.fsum(a.equity(mark) for a in open_accounts),
             log=tuple(lines),
+            sources=observations(composite, self.params, tick=tick),
         )
         self.frames.append(frame)
         self.log.extend(f"t+{tick:04d}s  {line}" for line in lines)
