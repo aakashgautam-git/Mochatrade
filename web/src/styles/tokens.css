@@ -20,7 +20,7 @@
   /* Text */
   --text: #f2ede7;
   --text-dim: #a79e96;
-  --text-faint: #6b625b;
+  --text-faint: #8c827a; /* was #6b625b: 2.93:1 on surface, failed AA. Now 4.65:1. */
 
   /* Accent — mocha. Primary actions and key data only. */
   --accent: #c98a5e;
@@ -66,7 +66,7 @@
 
   --text: #1c1917;
   --text-dim: #5c534c;
-  --text-faint: #8a807a;
+  --text-faint: #766c65; /* was #8a807a: 3.85:1 on white, failed AA. Now 5.12:1. */
 
   --accent: #a96c42;
   --accent-soft: rgba(169, 108, 66, 0.1);

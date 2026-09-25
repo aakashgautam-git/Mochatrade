@@ -250,7 +250,7 @@ Never write a raw hex in a component.
 | `--line` | `rgba(255,255,255,0.08)` | hairline borders |
 | `--text` | `#F2EDE7` | primary |
 | `--text-dim` | `#A79E96` | secondary |
-| `--text-faint` | `#6B625B` | tertiary |
+| `--text-faint` | `#8C827A` | tertiary (was `#6B625B`, which failed AA at 2.93:1) |
 | `--accent` | `#C98A5E` | mocha — primary actions, key data |
 | `--accent-soft` | `rgba(201,138,94,0.12)` | accent wash |
 | `--pos` | `#5FA37A` | muted green |
@@ -259,7 +259,8 @@ Never write a raw hex in a component.
 | `--halt` | `#8B5CF6` | **halt / intervention states ONLY** |
 
 Light theme — **Report and Playbook pages only**: `--bg #FAF7F4`,
-`--surface #FFFFFF`, `--text #1C1917`.
+`--surface #FFFFFF`, `--text #1C1917`, `--text-faint #766C65` (was `#8A807A`,
+3.85:1).
 
 ### Type
 
@@ -281,9 +282,9 @@ Derived from `tokens.css` by `color-mix`; no new hex values.
 - **Solid fills come in pairs that invert per palette**: `accent-solid` /
   `on-accent-solid`, `halt-solid` / `on-halt-solid`. The naive pairs pass dark
   and fail light, and the top bar is visible on the light document pages.
-- **`--text-faint` fails AA for text** (2.93:1 on surface dark, 3.85:1 light).
-  Use it for rules and disabled states only. Proposed replacement value:
-  `#8C827A` (4.65:1 on surface, 5.00:1 on page) — awaiting approval.
+- **`--text-faint` now passes AA in both palettes**: `#8C827A` dark (4.65:1 on
+  surface, 5.00:1 on page) and `#766C65` light (5.12:1, 4.80:1). The original
+  values failed at 2.93:1 and 3.85:1.
 - After editing `tailwind.config.js`, **restart Vite**. The dev server does not
   reload the config, so new colour classes silently fail to generate.
 
@@ -296,16 +297,19 @@ Derived from `tokens.css` by `color-mix`; no new hex values.
 - Generous whitespace. Density comes from good typography, not from cramming.
 - Motion: 150–200ms ease-out only. No spring bounce, no scale-on-hover above
   1.02. Numbers transition by **counting**, not by fading. Respect
-  `prefers-reduced-motion`. One deliberate exception: a count runs 400ms
-  (`COUNT_MS`), because a 200ms count reads as a flicker. Skeletons are static;
-  the only loop is the button spinner, and it stops under reduced motion.
+  `prefers-reduced-motion`. Skeletons are static; the only loop is the button
+  spinner, and it stops under reduced motion.
+- **The one named exception: number count-up runs 400ms** (`COUNT_MS` in
+  `web/src/hooks/useCountUp.ts`). At 200ms a count reads as a flicker rather
+  than as counting, which defeats the rule that numbers transition by counting.
+  Nothing else may exceed 200ms.
 - Every state that uses colour also uses a label or a shape. Text contrast
   ≥ 4.5:1 against its surface.
 
 ### The shell
 
-- **Routing is a 60-line history router** (`web/src/app/router.tsx`), not a
-  dependency. `/demo` is the screening page standalone; `/` embeds it inside
+- **Routing is a 60-line history router** (`web/src/app/router.tsx`), by
+  decision: no `react-router`. `/demo` is the screening page standalone; `/` embeds it inside
   the shell until Phase 6.
 - **The system-state pill** changes colour, words and icon together, with a
   2px band across the top of the viewport for any non-normal state. LIQ PAUSED

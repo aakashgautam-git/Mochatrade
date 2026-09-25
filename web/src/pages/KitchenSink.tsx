@@ -716,16 +716,16 @@ function ratio(a: RGBA, b: RGBA): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const PAIRS: Array<{ fg: string; bg: string; tint?: string; use: string; large?: boolean }> = [
+const PAIRS: Array<{ fg: string; bg: string; tint?: string; use: string; reference?: boolean }> = [
   { fg: "--text", bg: "--surface", use: "Primary text" },
   { fg: "--text-dim", bg: "--surface", use: "Secondary text, labels" },
-  { fg: "--text-faint", bg: "--surface", use: "Tertiary — not for text below 18px" },
+  { fg: "--text-faint", bg: "--surface", use: "Tertiary text" },
   { fg: "--text-faint", bg: "--bg", use: "Tertiary on page" },
   { fg: "--on-accent-solid", bg: "--accent-solid", use: "Primary button" },
   { fg: "--on-halt-solid", bg: "--halt-solid", use: "HALTED pill" },
-  { fg: "--pos", bg: "--surface", use: "Raw token as text" },
-  { fg: "--neg", bg: "--surface", use: "Raw token as text" },
-  { fg: "--halt", bg: "--surface", use: "Raw token as text" },
+  { fg: "--pos", bg: "--surface", use: "Raw token — shown to justify the -fg tokens, never used for text", reference: true },
+  { fg: "--neg", bg: "--surface", use: "Raw token — shown to justify the -fg tokens, never used for text", reference: true },
+  { fg: "--halt", bg: "--surface", use: "Raw token — shown to justify the -fg tokens, never used for text", reference: true },
   { fg: "--accent-fg", bg: "--surface", tint: "--accent-soft", use: "Accent badge" },
   { fg: "--pos-fg", bg: "--surface", tint: "--pos-soft", use: "Positive badge" },
   { fg: "--neg-fg", bg: "--surface", tint: "--neg-soft", use: "Negative badge" },
@@ -799,7 +799,7 @@ function TokensSection() {
                     <td className="px-6 py-3 text-sm text-text-dim">{r.use}</td>
                     <td className="num px-6 py-3 text-right text-text">{r.value ? `${r.value.toFixed(2)}:1` : "—"}</td>
                     <td className="px-6 py-3">
-                      {r.value === null ? null : pass ? <Badge tone="pos">Pass</Badge> : <Badge tone="neg">Fail</Badge>}
+                      {r.value === null ? null : r.reference ? <Badge>Reference</Badge> : pass ? <Badge tone="pos">Pass</Badge> : <Badge tone="neg">Fail</Badge>}
                     </td>
                   </tr>
                 );
