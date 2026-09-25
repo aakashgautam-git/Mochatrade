@@ -58,6 +58,8 @@ export interface RiskPolicy {
   composite_l3_min_sources: number;
   velocity_window_seconds: number;
   velocity_trigger_frac_of_dcb: number;
+  velocity_cooldown_seconds: number;
+  velocity_escalation_multiplier: number;
   price_band_frac_of_dcb: number;
   dcb_offhours_multiplier: number;
   dcb_lookback_seconds: number;
@@ -177,6 +179,9 @@ export interface Tick {
   reduce_only: boolean;
   liquidations_paused: boolean;
   trading_paused: boolean;
+  /** Which layer holds trading paused. Tells a 5s velocity pause from a 2-minute breaker. */
+  pause_reason: "circuit_breaker" | "velocity" | "halt" | null;
+  velocity_level: number;
   halted: boolean;
   max_leverage: number;
   stage: string;

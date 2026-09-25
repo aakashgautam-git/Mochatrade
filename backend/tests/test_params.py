@@ -31,10 +31,12 @@ def test_every_field_has_a_citation() -> None:
 
 
 def test_derived_fields_are_declared_as_such() -> None:
-    """Three values are ours, not the brief's. They say so in their own text."""
+    """Five values are ours, not the brief's. They say so in their own text."""
     assert DERIVED_FIELDS == {
         "partial_liq_target_mm_multiple",
         "velocity_trigger_frac_of_dcb",
+        "velocity_cooldown_seconds",
+        "velocity_escalation_multiplier",
         "price_band_frac_of_dcb",
     }
 

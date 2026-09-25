@@ -101,6 +101,8 @@ class RiskPolicy(models.Model):
     # -- Circuit ladder ----------------------------------------------------
     velocity_window_seconds = _param(models.PositiveIntegerField, "velocity_window_seconds")
     velocity_trigger_frac_of_dcb = _param(models.FloatField, "velocity_trigger_frac_of_dcb")
+    velocity_cooldown_seconds = _param(models.PositiveIntegerField, "velocity_cooldown_seconds")
+    velocity_escalation_multiplier = _param(models.FloatField, "velocity_escalation_multiplier")
     price_band_frac_of_dcb = _param(models.FloatField, "price_band_frac_of_dcb")
     dcb_offhours_multiplier = _param(models.FloatField, "dcb_offhours_multiplier")
     dcb_lookback_seconds = _param(models.PositiveIntegerField, "dcb_lookback_seconds")

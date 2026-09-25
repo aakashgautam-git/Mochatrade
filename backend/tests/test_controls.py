@@ -149,3 +149,89 @@ def test_timed_pauses_expire() -> None:
     assert flags.trading_paused
     flags.tick_expiries(10)
     assert not flags.trading_paused
+
+
+# -- velocity cooldown and escalation (Phase 5.5 A) ---------------------------
+
+def _falling(start: float = 100.0, step_pct: float = 2.0):
+    """A price that drops step_pct every tick: fast enough to breach any window."""
+    price = start
+    while True:
+        yield price
+        price *= 1 - step_pct / 100
+
+
+def _drive(vm, prices, ticks):
+    fired = []
+    for tick in ticks:
+        pause = vm.step(next(prices), tick)
+        if pause is not None:
+            fired.append(pause)
+    return fired
+
+
+def test_cooldown_blocks_a_refire_while_the_market_is_still_falling() -> None:
+    """The stutter this fixes: 56 five-second pauses in one run, because the
+    layer re-fired three seconds after every reopen."""
+    params = P.evolve(velocity_cooldown_seconds=10)
+    vm = VelocityMonitor(params, tier=1, offhours=False)
+    fired = _drive(vm, _falling(), range(0, 17))
+    assert len(fired) == 1
+    first = fired[0]
+    assert first.level == 0 and not first.escalated
+    assert first.ticks == params.velocity_window_ticks  # the base 5s pause
+    # The pause ends at first.until; no second pause before cooldown expires.
+    assert vm.cooldown_until == first.until + 10
+
+
+def test_still_moving_when_the_cooldown_ends_escalates_to_a_longer_pause() -> None:
+    params = P.evolve(velocity_cooldown_seconds=10)
+    vm = VelocityMonitor(params, tier=1, offhours=False)
+    fired = _drive(vm, _falling(), range(0, 400))
+    assert [p.ticks for p in fired[:4]] == [5, 20, 80, 120]  # capped at the DCB pause
+    assert [p.level for p in fired[:4]] == [0, 1, 2, 3]
+    assert all(p.escalated for p in fired[1:])
+    # Every re-fire happens only after the previous pause AND its cooldown.
+    for prev, nxt in zip(fired, fired[1:]):
+        assert nxt.tick >= prev.until + 10
+
+
+def test_escalation_never_outlasts_the_circuit_breaker() -> None:
+    assert P.velocity_pause_ticks(0) == 5
+    assert P.velocity_pause_ticks(1) == 20
+    assert P.velocity_pause_ticks(2) == 80
+    assert P.velocity_pause_ticks(9) == P.dcb_pause_ticks == 120
+
+
+def test_a_calm_window_after_cooldown_resets_the_ladder() -> None:
+    params = P.evolve(velocity_cooldown_seconds=10)
+    vm = VelocityMonitor(params, tier=1, offhours=False)
+    first = _drive(vm, _falling(), range(0, 3))[0]
+    calm_until = first.until + 10 + params.velocity_window_ticks + 2
+    flat = iter([50.0] * 1000)
+    assert _drive(vm, flat, range(3, calm_until)) == []
+    assert vm.level == 0
+    again = _drive(vm, _falling(start=50.0), range(calm_until, calm_until + 3))
+    assert again and again[0].level == 0 and again[0].ticks == 5
+
+
+def test_the_window_keeps_measuring_through_a_pause() -> None:
+    """A check at cooldown end must see the real recent move, not a window that
+    froze when the pause began."""
+    vm = VelocityMonitor(P.evolve(velocity_cooldown_seconds=0), tier=1, offhours=False)
+    prices = _falling()
+    fired = _drive(vm, prices, range(0, 3))
+    assert fired and fired[0].until == 7
+    last = None
+    for tick in range(3, 7):  # inside the pause
+        last = next(prices)
+        assert vm.step(last, tick) is None
+    assert len(vm._window) == P.velocity_window_ticks
+    assert vm._window[-1] == last
+
+
+def test_zero_cooldown_reproduces_the_old_behaviour_of_refiring_immediately() -> None:
+    vm = VelocityMonitor(P.evolve(velocity_cooldown_seconds=0, velocity_escalation_multiplier=1.0), tier=1, offhours=False)
+    fired = _drive(vm, _falling(), range(0, 40))
+    assert len(fired) >= 6
+    assert {p.ticks for p in fired} == {5}

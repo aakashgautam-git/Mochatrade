@@ -63,8 +63,9 @@ from .scenario import Scenario
 
 #: Version of the Frame's shape. Anything that persists frames must include it
 #: in its cache key: a run stored before a field existed must not be served as
-#: if it had that field. 2 = per-source oracle observations.
-FRAME_SCHEMA = 2
+#: if it had that field. 2 = per-source oracle observations. 3 = pause reason
+#: and velocity escalation level.
+FRAME_SCHEMA = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +94,12 @@ class Frame:
     reduce_only: bool
     liquidations_paused: bool
     trading_paused: bool
+    pause_reason: str | None
+    """Which layer is holding trading paused: "circuit_breaker", "velocity",
+    "halt", or None. Before this, a chart could not tell a 5-second velocity
+    pause from a 2-minute breaker."""
+
+    velocity_level: int
     halted: bool
     max_leverage: float
     stage: str
@@ -380,15 +387,25 @@ class Engine:
         self.book.update_liquidity(self.vol.realised_bps)
 
         # 5. volatility controls
-        if self.controls.velocity_logic and self.velocity.check(self.book.mid):
-            if self.flags.velocity_paused_until is None:
-                self.flags.velocity_paused_until = tick + params.velocity_window_ticks
-                lines.append(
-                    f"Velocity logic: {self.velocity.trigger_pct:.2f}% in "
-                    f"{params.velocity_window_seconds}s. "
-                    f"{params.velocity_window_seconds}s pause to let "
-                    "participants reassess."
-                )
+        if self.controls.velocity_logic:
+            pause = self.velocity.step(self.book.mid, tick)
+            if pause is not None:
+                self.flags.velocity_paused_until = pause.until
+                if pause.escalated:
+                    lines.append(
+                        f"Velocity logic escalated to level {pause.level}: the move "
+                        f"was still over {self.velocity.trigger_pct:.2f}% in "
+                        f"{params.velocity_window_seconds}s when the "
+                        f"{params.velocity_cooldown_seconds}s cooldown ended. "
+                        f"{pause.ticks}s pause."
+                    )
+                else:
+                    lines.append(
+                        f"Velocity logic: {self.velocity.trigger_pct:.2f}% in "
+                        f"{params.velocity_window_seconds}s. {pause.ticks}s pause to "
+                        "let participants reassess; the layer then cools down for "
+                        f"{params.velocity_cooldown_seconds}s."
+                    )
         if self.controls.dynamic_circuit_breaker:
             if self.breaker.check(self.book.mid) and self.flags.dcb_paused_until is None:
                 self.flags.dcb_paused_until = tick + params.dcb_pause_ticks
@@ -566,6 +583,13 @@ class Engine:
             reduce_only=self.flags.reduce_only or self.auto_reduce_only,
             liquidations_paused=self.flags.liquidations_paused or self.auto_liq_pause,
             trading_paused=self.flags.trading_paused,
+            pause_reason=(
+                "halt" if self.flags.halted
+                else "circuit_breaker" if self.flags.dcb_paused_until is not None
+                else "velocity" if self.flags.velocity_paused_until is not None
+                else None
+            ),
+            velocity_level=self.velocity.level,
             halted=self.flags.halted,
             max_leverage=self.flags.max_leverage,
             stage=self.flags.stage.value,

@@ -112,6 +112,7 @@ class RiskPolicyAdmin(admin.ModelAdmin):
         ("Circuit ladder", {
             "fields": (
                 "velocity_window_seconds", "velocity_trigger_frac_of_dcb",
+                "velocity_cooldown_seconds", "velocity_escalation_multiplier",
                 "price_band_frac_of_dcb", "dcb_offhours_multiplier",
                 "dcb_lookback_seconds", "dcb_pause_seconds",
             ),

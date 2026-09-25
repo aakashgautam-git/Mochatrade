@@ -130,14 +130,31 @@ def test_outage_makes_the_grace_window_worthless() -> None:
 
 
 def test_upi_prefunded_credit_saves_accounts_the_late_settlement_would_not() -> None:
-    """Class E. The most India-specific control in the brief."""
-    with_credit = run("upi_settlement_delay", ControlStack.full()).summary
-    without = run(
-        "upi_settlement_delay", ControlStack.full().without("upi_prefunded_credit")
-    ).summary
+    """Class E. The most India-specific control in the brief.
+
+    Measured on what the control is FOR: accounts liquidated while their UPI
+    deposit was still in flight. Total liquidations used to be the assertion,
+    but once velocity pauses escalate they absorb most of the cascade and the
+    total stops being a sensitive signal -- 16 against 16 -- while the class E
+    count still falls. The total must not get worse.
+    """
+    scenario = by_key("upi_settlement_delay")
+
+    def in_flight_losses(controls: ControlStack):
+        result = Engine(scenario, P, controls).run()
+        hit = [
+            a for a in result.accounts
+            if a.upi_deposit_inr > 0 and not a.open
+            and a.liquidated_tick is not None and a.liquidated_tick < (a.upi_settles_tick or 0)
+        ]
+        return result.summary, len(hit)
+
+    with_credit, e_with = in_flight_losses(ControlStack.full())
+    without, e_without = in_flight_losses(ControlStack.full().without("upi_prefunded_credit"))
     assert with_credit.upi_credits_issued > 0
     assert without.upi_credits_issued == 0
-    assert with_credit.accounts_liquidated < without.accounts_liquidated
+    assert e_with < e_without
+    assert with_credit.accounts_liquidated <= without.accounts_liquidated
 
 
 def test_time_of_day_cap_applies_to_equity_perps_only() -> None:

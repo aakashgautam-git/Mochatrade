@@ -106,6 +106,8 @@ class RiskParams:
     dcb_pause_seconds: int = 120
     velocity_window_seconds: int = 5
     velocity_trigger_frac_of_dcb: float = 0.5  # DERIVED
+    velocity_cooldown_seconds: int = 10  # DERIVED, tuned (see FIELD_SOURCES)
+    velocity_escalation_multiplier: float = 4.0  # DERIVED
     price_band_frac_of_dcb: float = 1.0  # DERIVED
 
     # --- Oracle and marking ------------------------------------------------
@@ -197,6 +199,17 @@ class RiskParams:
     @property
     def velocity_window_ticks(self) -> int:
         return max(1, int(round(self.velocity_window_seconds / TICK_SECONDS)))
+
+    @property
+    def velocity_cooldown_ticks(self) -> int:
+        return max(0, int(round(self.velocity_cooldown_seconds / TICK_SECONDS)))
+
+    def velocity_pause_ticks(self, level: int) -> int:
+        """Pause length at an escalation level: the base velocity pause times the
+        multiplier per level, capped at the circuit breaker's own pause so the
+        micro layer never outlasts the meso layer."""
+        base = self.velocity_window_ticks * self.velocity_escalation_multiplier ** max(0, level)
+        return max(1, min(int(round(base)), self.dcb_pause_ticks))
 
     @property
     def staleness_ticks(self) -> int:
@@ -302,6 +315,26 @@ FIELD_SOURCES: Final[dict[str, str]] = {
         "but publish no trigger threshold. We set it at half the DCB variant "
         "over the velocity window, so the micro layer fires before the meso "
         "layer, which is the ordering the four-layer design requires."
+    ),
+    "velocity_cooldown_seconds": (
+        "DERIVED. After a velocity pause ends, the velocity check may not fire "
+        "again for this long. Without it the protected macro cascade paused 56 "
+        "times in 5-second bursts with 3 seconds of trading between them, and each "
+        "reopen dumped queued liquidations back into the book: 83 price swings of "
+        "50 bps or more against 4 with no controls at all. CFTC/FIA specify the "
+        "layer and its ~5s pause but no re-arm rule. Tuning started at 30s by "
+        "instruction; at 20s and above the layer fires twice, the cascade runs "
+        "through continuous trading, and controls-on loses to controls-off on "
+        "unnecessary liquidations in upi_settlement_delay. 10s, with escalation, "
+        "is the longest cooldown that keeps the controls ahead in every scenario. "
+        "Provisional: re-tuned once reopens go through the call auction."
+    ),
+    "velocity_escalation_multiplier": (
+        "DERIVED. If the price is still moving too fast when the cooldown ends, the "
+        "next velocity pause is this many times longer than the last (5s, 20s, "
+        "80s), capped at the circuit breaker's 120s pause. Repeating the same short "
+        "pause into a market that has not calmed is what produced the zig-zag. The "
+        "escalation resets once a full velocity window passes calm after cooldown."
     ),
     "price_band_frac_of_dcb": (
         "DERIVED. CME price bands are per-product and continuously recalculated, "

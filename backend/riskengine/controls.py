@@ -252,15 +252,44 @@ class CircuitBreaker:
         self._window.clear()
 
 
+@dataclass(frozen=True, slots=True)
+class VelocityPause:
+    """One firing of the velocity layer."""
+
+    tick: int
+    until: int
+    level: int
+    escalated: bool
+
+    @property
+    def ticks(self) -> int:
+        return self.until - self.tick
+
+
 @dataclass(slots=True)
 class VelocityMonitor:
     """Micro layer. Analyses moves over seconds and calls a brief pause to let
-    participants reassess. CFTC/FIA cite about five seconds."""
+    participants reassess. CFTC/FIA cite about five seconds.
+
+    Two rules on top of the raw trigger, both learned the hard way:
+
+    - Cooldown. After a pause ends, the layer may not fire again for
+      `velocity_cooldown_seconds`. Without it, a falling market re-triggers three
+      seconds after every reopen and trading stutters: 56 pauses in one run.
+    - Escalation. If the move is still too fast in the first window after the
+      cooldown, the next pause is longer rather than the same length again. A
+      market that has not calmed in 30 seconds will not calm in another five.
+      A full calm window after the cooldown resets the ladder.
+    """
 
     params: RiskParams
     tier: int
     offhours: bool
     _window: deque[float] = field(default_factory=deque)
+    level: int = 0
+    paused_until: int | None = None
+    cooldown_until: int | None = None
+    fires: int = 0
 
     def __post_init__(self) -> None:
         self._window = deque(maxlen=self.params.velocity_window_ticks)
@@ -281,6 +310,38 @@ class VelocityMonitor:
 
     def restart(self) -> None:
         self._window.clear()
+
+    def step(self, price: float, tick: int) -> VelocityPause | None:
+        """Observe this tick's price; return a pause if the layer fires now.
+
+        The price is always pushed, so the window keeps measuring through pauses
+        and cooldowns and a check at cooldown end sees the real recent move.
+        """
+        breached = self.check(price)
+
+        if self.paused_until is not None:
+            if tick < self.paused_until:
+                return None
+            self.cooldown_until = self.paused_until + self.params.velocity_cooldown_ticks
+            self.paused_until = None
+
+        if self.cooldown_until is not None and tick < self.cooldown_until:
+            return None
+
+        escalation_window_open = (
+            self.cooldown_until is not None
+            and tick < self.cooldown_until + self.params.velocity_window_ticks
+        )
+        if not breached:
+            if self.cooldown_until is not None and not escalation_window_open:
+                self.level = 0
+            return None
+
+        self.level = self.level + 1 if escalation_window_open else 0
+        until = tick + self.params.velocity_pause_ticks(self.level)
+        self.paused_until = until
+        self.fires += 1
+        return VelocityPause(tick=tick, until=until, level=self.level, escalated=self.level > 0)
 
 
 def apply_action(

@@ -70,6 +70,7 @@ class RiskPolicySerializer(serializers.ModelSerializer):
             "composite_l1_min_sources", "composite_l2_min_sources",
             "composite_l3_min_sources",
             "velocity_window_seconds", "velocity_trigger_frac_of_dcb",
+            "velocity_cooldown_seconds", "velocity_escalation_multiplier",
             "price_band_frac_of_dcb", "dcb_offhours_multiplier",
             "dcb_lookback_seconds", "dcb_pause_seconds",
             "twap_slice_ms", "twap_max_participation_pct",
@@ -170,6 +171,8 @@ class TickSerializer(serializers.Serializer):
     reduce_only = serializers.BooleanField()
     liquidations_paused = serializers.BooleanField()
     trading_paused = serializers.BooleanField()
+    pause_reason = serializers.CharField(allow_null=True, default=None)
+    velocity_level = serializers.IntegerField(default=0)
     halted = serializers.BooleanField()
     max_leverage = serializers.FloatField()
     stage = serializers.CharField()
