@@ -31,7 +31,7 @@ import math
 from dataclasses import asdict, dataclass
 
 from .auction import AuctionRecord
-from .book import Book, VolatilityTracker
+from .book import Book, DepthSnapshot, VolatilityTracker
 from .controls import (
     ActionKind,
     CircuitBreaker,
@@ -48,6 +48,7 @@ from .liquidation import (
     LiquidationEngine,
     LiquidationEvent,
     LiquidationOutcome,
+    LiquidationRecord,
 )
 from .marking import MarkCalculator, MarkResult
 from .oracle import (
@@ -66,7 +67,16 @@ from .scenario import Scenario
 #: in its cache key: a run stored before a field existed must not be served as
 #: if it had that field. 2 = per-source oracle observations. 3 = pause reason
 #: and velocity escalation level. 4 = reopening call auction record.
-FRAME_SCHEMA = 4
+#: 5 = per-fill liquidation records and per-tick depth snapshots.
+FRAME_SCHEMA = 5
+
+#: Depth snapshot shape: ten 10 bps buckets per side covers exactly the 1% band
+#: the throttle's participation cap is measured against, so the ladder shows the
+#: liquidity the engine is allowed to take. Taken every tick, because the
+#: simulator steps tick by tick. Sizes only -- prices follow from the touch --
+#: so a snapshot is twenty integers.
+DEPTH_BUCKETS = 10
+DEPTH_BUCKET_BPS = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +135,13 @@ class Frame:
     log: tuple[str, ...] = ()
     auction: AuctionRecord | None = None
     """Set on the tick a pause reopened through a call auction."""
+
+    liquidations: tuple[LiquidationRecord, ...] = ()
+    """Every fill this tick, including ADL. Enough to split the cascade by
+    stage per tick without re-running anything."""
+
+    depth: DepthSnapshot | None = None
+    """Resting depth left at the end of the tick, both sides."""
 
     sources: tuple[SourceObservation, ...] = ()
     """Every oracle source's part in this tick's composite: the price it
@@ -666,6 +683,20 @@ class Engine:
             aggregate_equity=math.fsum(a.equity(mark) for a in open_accounts),
             log=tuple(lines),
             auction=auction,
+            liquidations=tuple(
+                LiquidationRecord(
+                    account_id=e.account_id,
+                    stage=e.stage.value,
+                    qty=e.qty,
+                    notional=e.notional,
+                    price=e.fill_price,
+                    via_auction=e.via_auction,
+                    closed=not self._still_open(e.account_id),
+                    survived_at_reference=e.survived_at_reference,
+                )
+                for e in outcome.events
+            ),
+            depth=self.book.depth_snapshot(levels=DEPTH_BUCKETS, bucket_bps=DEPTH_BUCKET_BPS),
             sources=observations(composite, self.params, tick=tick),
         )
         self.frames.append(frame)

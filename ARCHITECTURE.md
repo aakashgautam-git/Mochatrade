@@ -10,6 +10,14 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 
 ## Current phase
 
+> **PHASE 5.5 — ENGINE FIX (complete).** Velocity cooldown with escalation,
+> every pause reopens through a throttled call auction, and frames now carry
+> per-fill liquidation records and per-tick depth snapshots for Phase 6. The
+> protected macro run went from 56 pauses and 83 swings to 7 and 10. Two
+> decisions are open; see "Open decisions" below. 313 tests green.
+>
+> **NEXT: PHASE 6 — Simulator surface.** Await instructions before starting.
+>
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
 > app shell (rail, top bar, system-state pill, IST clock), a document palette
@@ -17,8 +25,7 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > a real headless browser: 60/60 Tab stops show a 2px focus ring, zero layout
 > shift while stats count, and contrast measured live in both palettes. The
 > screening demo lives on at `/demo` (standalone) and `/` (inside the shell).
->
-> **NEXT: PHASE 6 — Simulator surface.** Await instructions before starting.
+
 
 Phases are numbered by the project plan, not by build order: the risk engine
 (3) was built before the Django layer (2) because everything downstream needs a
@@ -32,6 +39,7 @@ trustworthy engine more than it needs a database.
 | 3 | Risk engine — pure-Python core + tests | Done |
 | 4 | REST API | Done |
 | 5 | Design system | Done |
+| 5.5 | Engine fix — velocity cooldown, reopening auction, Phase 6 data | Done |
 | 6 | Simulator surface | **Next** |
 | 7 | War room | Not started |
 | 8 | Forensics | Not started |
@@ -231,6 +239,34 @@ the wire.
   own permitted pace trips its own breaker, which is the root cause of the
   stutter. The cooldown and auction contain it; recalibrating the throttle
   would remove it. That is a policy decision, recorded in the Phase 5.5 report.
+
+### Data recorded for Phase 6
+
+Every frame carries `liquidations` (one record per fill: account, stage,
+quantity, notional, price, whether it cleared in an auction, whether it closed
+the account, and APE criterion 3) and `depth` (resting INR notional in ten
+10 bps buckets a side, after the tick's consumption). Ten 10 bps buckets cover
+exactly the 1% band the throttle's participation cap is measured against, and
+sizes-only keeps a snapshot to twenty integers because prices follow from the
+touch. Both are written to `LiquidationRecord` and `DepthSnapshot` in the same
+transaction as the oracle tape. The stage that closed an account is its last
+record with `closed` set; grouping a tick's records by stage is the cascade
+split. A full comparison is ~425 KB gzipped.
+
+### Open decisions (Phase 5.5)
+
+1. **Throttle vs velocity calibration.** At 20% participation the engine's own
+   pace (~88 bps/s) exceeds the velocity trigger (~40 bps/s). The shipped 10s
+   cooldown keeps the controls ahead everywhere but pauses trading for 581 of
+   720 seconds in the macro run and lets each reopen run 10s unchecked. An 8%
+   participation removes the conflict (1 pause, 0 swings) at the cost of more
+   liquidations and ADL. Not changed without approval: it is published policy.
+2. **The dynamic circuit breaker never fires.** Across all six scenarios it
+   fired zero times. Its bounds are (lookback low − variant, lookback high +
+   variant), so a steady crash that keeps making new lows never breaches. The
+   brief's "rolling 60-minute look-back high/low ± variant" more plausibly means
+   a falling market may not drop more than the variant below the lookback HIGH.
+   Fixing it changes every protected result, so it awaits a decision.
 
 ### Live engines
 

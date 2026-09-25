@@ -180,6 +180,30 @@ export interface AuctionRecord {
   liquidation_qty_carried: number;
 }
 
+export type LiquidationStage = "partial" | "market" | "backstop" | "adl";
+
+/** One fill. The last record for an account with `closed` set is the stage
+ * that closed it; grouping a tick's records by stage is the cascade split. */
+export interface LiquidationRecord {
+  account_id: string;
+  stage: LiquidationStage;
+  qty: number;
+  notional: number;
+  price: number;
+  via_auction: boolean;
+  closed: boolean;
+  survived_at_reference: boolean;
+}
+
+/** Resting depth left at the end of a tick: INR notional per bucket, nearest
+ * the touch first. Bid bucket i spans i*bucket_bps..(i+1)*bucket_bps below
+ * `best_bid`; asks likewise above `best_ask`. */
+export interface DepthSnapshot {
+  bucket_bps: number;
+  bids: number[];
+  asks: number[];
+}
+
 export interface Tick {
   tick: number;
   t_seconds: number;
@@ -211,7 +235,11 @@ export interface Tick {
   unnecessary_liquidations: number;
   accounts_open: number;
   aggregate_equity: number;
+  best_bid: number;
+  best_ask: number;
   auction: AuctionRecord | null;
+  liquidations: LiquidationRecord[];
+  depth: DepthSnapshot | null;
   sources: SourceObservation[];
 }
 

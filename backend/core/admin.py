@@ -24,6 +24,8 @@ from .models import (
     Claim,
     ClaimStatus,
     CommsUpdate,
+    DepthSnapshot,
+    LiquidationRecord,
     Incident,
     IncidentAction,
     Instrument,
@@ -266,6 +268,20 @@ class PriceObservationAdmin(admin.ModelAdmin):
     list_display = ("run", "tick", "source", "price", "is_stale", "weight", "excluded_reason")
     list_filter = ("source", "is_stale", "run")
     list_select_related = ("run",)
+
+
+@admin.register(LiquidationRecord)
+class LiquidationRecordAdmin(admin.ModelAdmin):
+    list_display = ("run", "tick", "account", "stage", "price", "notional_inr", "via_auction", "closed")
+    list_filter = ("stage", "via_auction", "closed", "survived_at_reference")
+    search_fields = ("account",)
+    list_select_related = ("run", "run__scenario")
+
+
+@admin.register(DepthSnapshot)
+class DepthSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("run", "tick", "mid", "depth_pct_of_baseline", "bucket_bps")
+    list_select_related = ("run", "run__scenario")
 
 
 # --------------------------------------------------------------------------

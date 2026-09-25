@@ -43,6 +43,8 @@ from riskengine.scenario import by_key
 from .models import (
     ENGINE_SOURCE,
     ActionType,
+    DepthSnapshot,
+    LiquidationRecord,
     PriceObservation,
     PriceSource,
     RiskPolicy,
@@ -226,8 +228,47 @@ def observation_rows(run: SimRun, frames: list[dict]) -> list[PriceObservation]:
 
 
 def write_observations(run: SimRun, frames: list[dict]) -> int:
+    """The whole tape for these frames, in the caller's transaction: oracle
+    observations, liquidation fills and depth snapshots."""
     rows = observation_rows(run, frames)
     PriceObservation.objects.bulk_create(rows, batch_size=5000)
+    LiquidationRecord.objects.bulk_create(
+        [
+            LiquidationRecord(
+                run=run,
+                tick=f["tick"],
+                account=x["account_id"],
+                stage=x["stage"],
+                qty=x["qty"],
+                notional_inr=_dec(round(x["notional"], 2)),
+                price=_dec(x["price"]),
+                via_auction=x["via_auction"],
+                closed=x["closed"],
+                survived_at_reference=x["survived_at_reference"],
+            )
+            for f in frames
+            for x in f.get("liquidations") or ()
+        ],
+        batch_size=5000,
+    )
+    DepthSnapshot.objects.bulk_create(
+        [
+            DepthSnapshot(
+                run=run,
+                tick=f["tick"],
+                mid=f["book_mid"],
+                best_bid=f["best_bid"],
+                best_ask=f["best_ask"],
+                bucket_bps=f["depth"]["bucket_bps"],
+                bids=list(f["depth"]["bids"]),
+                asks=list(f["depth"]["asks"]),
+                depth_pct_of_baseline=f["depth_pct_of_baseline"],
+            )
+            for f in frames
+            if f.get("depth")
+        ],
+        batch_size=5000,
+    )
     return len(rows)
 
 

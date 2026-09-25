@@ -711,6 +711,65 @@ class PriceObservation(models.Model):
         return f"t+{self.tick} {self.source} {self.price}"
 
 
+class LiquidationStage(models.TextChoices):
+    PARTIAL = "partial", "Partial (stage one, fee-free)"
+    MARKET = "market", "Market (full close, no two-stage)"
+    BACKSTOP = "backstop", "Backstop (below 2/3 MM, MM forfeited)"
+    ADL = "adl", "ADL (a winner force-closed)"
+
+
+class LiquidationRecord(models.Model):
+    """One fill. The last record with `closed` set is the stage that closed an
+    account; grouping by tick and stage is the cascade chart."""
+
+    run = models.ForeignKey(SimRun, on_delete=models.CASCADE, related_name="liquidations")
+    tick = models.PositiveIntegerField()
+    account = models.CharField(max_length=32, help_text="Account handle within the run.")
+    stage = models.CharField(max_length=10, choices=LiquidationStage.choices)
+    qty = models.FloatField()
+    notional_inr = models.DecimalField(max_digits=20, decimal_places=2)
+    price = models.DecimalField(max_digits=20, decimal_places=6)
+    via_auction = models.BooleanField(default=False)
+    closed = models.BooleanField(default=False, help_text="The account had no position left after this tick.")
+    survived_at_reference = models.BooleanField(
+        default=False, help_text="APE criterion 3: solvent at the Reference Composite."
+    )
+
+    class Meta:
+        ordering = ("run", "tick", "id")
+        indexes = [
+            models.Index(fields=["run", "tick"]),
+            models.Index(fields=["run", "account"]),
+        ]
+        verbose_name = "liquidation record"
+
+    def __str__(self) -> str:
+        return f"t+{self.tick} {self.account} {self.stage} @ {self.price}"
+
+
+class DepthSnapshot(models.Model):
+    """Resting depth left at the end of one tick: ten 10 bps buckets a side,
+    INR notional. Prices follow from the touch."""
+
+    run = models.ForeignKey(SimRun, on_delete=models.CASCADE, related_name="depth")
+    tick = models.PositiveIntegerField()
+    mid = models.FloatField()
+    best_bid = models.FloatField()
+    best_ask = models.FloatField()
+    bucket_bps = models.PositiveSmallIntegerField()
+    bids = models.JSONField(help_text="INR notional per bucket, nearest the touch first.")
+    asks = models.JSONField(help_text="INR notional per bucket, nearest the touch first.")
+    depth_pct_of_baseline = models.FloatField()
+
+    class Meta:
+        ordering = ("run", "tick")
+        unique_together = (("run", "tick"),)
+        verbose_name = "depth snapshot"
+
+    def __str__(self) -> str:
+        return f"t+{self.tick} depth {self.depth_pct_of_baseline:.0%} of baseline"
+
+
 # --------------------------------------------------------------------------
 # The incident record
 # --------------------------------------------------------------------------

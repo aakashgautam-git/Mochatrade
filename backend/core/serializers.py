@@ -169,6 +169,23 @@ class AuctionSerializer(serializers.Serializer):
     liquidation_qty_carried = serializers.FloatField()
 
 
+class LiquidationRecordSerializer(serializers.Serializer):
+    account_id = serializers.CharField()
+    stage = serializers.CharField()
+    qty = serializers.FloatField()
+    notional = serializers.FloatField()
+    price = serializers.FloatField()
+    via_auction = serializers.BooleanField()
+    closed = serializers.BooleanField()
+    survived_at_reference = serializers.BooleanField()
+
+
+class DepthSnapshotSerializer(serializers.Serializer):
+    bucket_bps = serializers.IntegerField()
+    bids = serializers.ListField(child=serializers.IntegerField())
+    asks = serializers.ListField(child=serializers.IntegerField())
+
+
 class TickSerializer(serializers.Serializer):
     """One frame. Numeric on purpose -- see the money note in the module docstring."""
 
@@ -201,7 +218,11 @@ class TickSerializer(serializers.Serializer):
     unnecessary_liquidations = serializers.IntegerField()
     accounts_open = serializers.IntegerField()
     aggregate_equity = serializers.FloatField()
+    best_bid = serializers.FloatField()
+    best_ask = serializers.FloatField()
     auction = AuctionSerializer(allow_null=True, default=None)
+    liquidations = LiquidationRecordSerializer(many=True, default=list)
+    depth = DepthSnapshotSerializer(allow_null=True, default=None)
     sources = SourceObservationSerializer(many=True, default=list)
 
 

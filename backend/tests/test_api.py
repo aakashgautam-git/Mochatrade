@@ -20,6 +20,8 @@ from core import runner
 from core.models import (
     Claim,
     CommsUpdate,
+    DepthSnapshot,
+    LiquidationRecord,
     Incident,
     IncidentAction,
     PolicyMarginTier,
@@ -576,3 +578,38 @@ def test_stepped_runs_extend_the_tape_without_duplicates(api, seeded) -> None:
     rows = PriceObservation.objects.filter(run=run)
     assert rows.count() == 40 * 9
     assert rows.values("tick", "source").distinct().count() == 40 * 9
+
+
+# --------------------------------------------------------------------------
+# Liquidation records and depth snapshots (Phase 5.5 C)
+# --------------------------------------------------------------------------
+
+def test_a_completed_run_writes_fills_and_depth(api, seeded) -> None:
+    body = post(api, "/api/runs/", {"scenario_slug": "macro_cascade", "controls_enabled": False}).json()
+    run = SimRun.objects.get(pk=body["run_id"])
+    fills = sum(len(f["liquidations"]) for f in run.tick_data)
+    assert LiquidationRecord.objects.filter(run=run).count() == fills > 0
+    assert DepthSnapshot.objects.filter(run=run).count() == run.total_ticks
+    closed = LiquidationRecord.objects.filter(run=run, closed=True).values("account").distinct().count()
+    assert closed == body["summary"]["accounts_liquidated"]
+
+
+def test_ticks_on_the_wire_carry_fills_and_depth(api, seeded) -> None:
+    body = post(api, "/api/runs/", {"scenario_slug": "macro_cascade", "controls_enabled": False}).json()
+    tick = max(body["ticks"], key=lambda t: len(t["liquidations"]))
+    assert tick["liquidations"][0]["stage"] in {"partial", "market", "backstop", "adl"}
+    assert len(tick["depth"]["bids"]) == 10
+    assert tick["best_bid"] < tick["best_ask"]
+
+
+def test_stepped_runs_extend_fills_and_depth_without_duplicates(api, seeded) -> None:
+    code = declare(api, slug="macro_cascade")
+    run = Incident.objects.get(code=code).run
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 120})
+    runner._LIVE.clear()
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 60})
+    assert DepthSnapshot.objects.filter(run=run).count() == 180
+    assert DepthSnapshot.objects.filter(run=run).values("tick").distinct().count() == 180
+    run.refresh_from_db()
+    fills = sum(len(f["liquidations"]) for f in run.tick_data)
+    assert LiquidationRecord.objects.filter(run=run).count() == fills

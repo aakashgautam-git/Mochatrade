@@ -215,6 +215,22 @@ class LiquidationEvent:
     than by walking the book in continuous trading."""
 
 
+@dataclass(frozen=True, slots=True)
+class LiquidationRecord:
+    """One fill, as a frame records it: who, which stage, how much, at what
+    price, and whether it finished the account. The last record with `closed`
+    set is the stage that closed an account."""
+
+    account_id: str
+    stage: str
+    qty: float
+    notional: float
+    price: float
+    via_auction: bool
+    closed: bool
+    survived_at_reference: bool
+
+
 @dataclass(slots=True)
 class LiquidationOutcome:
     """Everything that happened to the engine in one tick."""

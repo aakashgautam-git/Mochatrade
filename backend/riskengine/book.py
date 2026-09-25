@@ -124,6 +124,20 @@ class Fill:
 
 
 @dataclass(frozen=True, slots=True)
+class DepthSnapshot:
+    """Resting depth left on each side at the end of a tick, bucketed.
+
+    `bids[i]` is the INR notional resting between i*bucket_bps and
+    (i+1)*bucket_bps below the best bid; `asks[i]` the same above the best ask.
+    Prices are implied by the touch, so a snapshot is sizes only.
+    """
+
+    bucket_bps: int
+    bids: tuple[int, ...]
+    asks: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class BandCheck:
     """Pre-trade price band verdict. CFTC/FIA's pre-trade layer: reject orders
     outside reference +/- variant, dynamic and regularly recalculated."""
@@ -363,6 +377,36 @@ class Book:
             worst_price=worst,
             slippage_bps=slippage,
             exhausted=exhausted,
+        )
+
+    def depth_snapshot(self, *, levels: int, bucket_bps: int) -> DepthSnapshot:
+        """What is left in the book after this tick's consumption, per side.
+
+        Consumption eats levels from the touch outward, so a tick of forced
+        selling shows up as an emptied top of the bid side -- the thinning a
+        depth ladder exists to show.
+        """
+        per = max(1, int(round(bucket_bps / self.params.level_bps)))
+
+        def side(consumed: float) -> tuple[int, ...]:
+            left = consumed
+            out: list[int] = []
+            for bucket in range(levels):
+                total = 0.0
+                for k in range(bucket * per, (bucket + 1) * per):
+                    if k >= len(self._weights):
+                        break
+                    notional = self._weights[k] * self._norm_1pct * self.liquidity_frac
+                    take = notional if notional < left else left
+                    left -= take
+                    total += notional - take
+                out.append(int(round(total)))
+            return tuple(out)
+
+        return DepthSnapshot(
+            bucket_bps=per * self.params.level_bps,
+            bids=side(self._consumed_bid),
+            asks=side(self._consumed_ask),
         )
 
     def resting_levels(self, *, sell: bool, bound: float) -> list[tuple[float, float]]:
