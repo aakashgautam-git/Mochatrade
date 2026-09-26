@@ -2,6 +2,7 @@
 on the engine and cached like runs."""
 from __future__ import annotations
 
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 
 import pytest
@@ -9,6 +10,7 @@ from django.core.management import call_command
 from rest_framework.test import APIClient
 
 from core import runner
+from riskengine import attribution as attribution_run
 from riskengine.params import DEFAULT_PARAMS
 from riskengine.scenario import by_key
 from core.models import ControlAttribution, Scenario
@@ -51,8 +53,10 @@ def test_a_pool_computes_exactly_what_one_process_does() -> None:
     """warm_runs measures in a process pool; the engine is pure, so a worker
     must return byte-for-byte what the calling process would."""
     job = (SLUG, DEFAULT_PARAMS, "liquidation_throttle", ControlAttribution.ALONE, by_key(SLUG).seed)
-    with ProcessPoolExecutor(max_workers=1) as pool:
-        pooled = pool.submit(runner._attribution_summary, *job).result()
+    # spawn, not fork: the way macOS and Windows start workers. A worker that
+    # imported Django models here would fail with AppRegistryNotReady.
+    with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
+        pooled = pool.submit(attribution_run.summary, *job).result()
     assert pooled == runner._attribution_summary(*job)
 
 

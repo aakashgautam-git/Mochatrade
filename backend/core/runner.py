@@ -46,6 +46,7 @@ from riskengine.controls import (
     ControlStack,
     OperatorAction,
 )
+from riskengine import attribution as attribution_run
 from riskengine.indian import inr_text
 from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
@@ -791,13 +792,9 @@ the counts say how many people it touched."""
 MONEY_METRICS = frozenset({"attributable_loss", "user_loss"})
 
 
-def _stack_for(name: str, mode: str) -> ControlStack:
-    return ControlStack.none().with_only(name) if mode == ControlAttribution.ALONE else ControlStack.full().without(name)
-
-
 def _attribution_summary(key: str, params: Any, name: str, mode: str, seed: int) -> dict[str, Any]:
-    """One attribution run. Top-level and pure, so a process pool can run it."""
-    return Engine(by_key(key), params, _stack_for(name, mode), seed=seed).run().summary.as_dict()
+    """One attribution run, delegated to the pure engine package."""
+    return attribution_run.summary(key, params, name, mode, seed)
 
 
 def warm_attribution(rows: list[Scenario], *, policy: RiskPolicy, workers: int = 1) -> int:
@@ -823,8 +820,16 @@ def warm_attribution(rows: list[Scenario], *, policy: RiskPolicy, workers: int =
     if workers > 1:
         from concurrent.futures import ProcessPoolExecutor
 
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            summaries = list(pool.map(_attribution_summary, *zip(*jobs)))
+        from concurrent.futures.process import BrokenProcessPool
+
+        # The worker lives in riskengine, which never imports Django, so this
+        # works whether the platform forks (Linux) or spawns (macOS, Windows).
+        # If a pool cannot start at all, fall back to one process.
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                summaries = list(pool.map(attribution_run.summary, *zip(*jobs)))
+        except (BrokenProcessPool, OSError):
+            summaries = [_attribution_summary(*job) for job in jobs]
     else:
         summaries = [_attribution_summary(*job) for job in jobs]
     ControlAttribution.objects.bulk_create([
