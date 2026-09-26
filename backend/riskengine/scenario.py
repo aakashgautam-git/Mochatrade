@@ -258,11 +258,11 @@ class PopulationSpec:
             notional = capital * leverage
 
             side = Side.LONG if rng.chance(self.long_share) else Side.SHORT
-            mode = (
-                MarginMode.ISOLATED
-                if isolated_default or not rng.chance(self.cross_share)
-                else MarginMode.CROSS
-            )
+            # Draw the user's own choice first, then apply the default: skipping
+            # the draw when the control is on shifted every later account and
+            # compared two different books.
+            chose_cross = rng.chance(self.cross_share)
+            mode = MarginMode.ISOLATED if isolated_default or not chose_cross else MarginMode.CROSS
             accounts.append(
                 Account(
                     id=f"MT{i + 1:05d}",

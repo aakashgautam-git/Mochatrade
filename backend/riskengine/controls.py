@@ -142,6 +142,23 @@ CONTROL_KILLS: dict[str, str] = {
     "isolated_margin_default": "Amplifier 4 - one bad asset wiping a portfolio",
 }
 
+CONTROL_NOT_MODELLED: dict[str, str] = {
+    "pre_trade_price_bands": (
+        "Not wired into continuous trading. The band collars the reopening "
+        "auction whether or not this control is on, so switching it shows "
+        "nothing. Wiring it was measured: it fights the liquidation throttle, so "
+        "it waits on a calibration decision."
+    ),
+    "isolated_margin_default": (
+        "Recorded, not modelled. Every account carries its margin mode, but the "
+        "engine trades one instrument against INR collateral, so there is no "
+        "second asset for cross margin to spread a loss from. Amplifier 4 needs "
+        "a collateral asset and a depeg path, which the research does not size."
+    ),
+}
+"""Controls the engine carries but cannot yet show an effect for, and why. The
+attribution says so instead of reporting a zero as a finding."""
+
 
 class ActionKind(Enum):
     """What the operator can do in the war room. Every one of these changes the

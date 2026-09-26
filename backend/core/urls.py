@@ -11,6 +11,8 @@ urlpatterns = [
     path("instruments/", views.InstrumentListView.as_view(), name="instruments"),
     path("scenarios/", views.ScenarioListView.as_view(), name="scenarios"),
     path("scenarios/<slug:slug>/", views.ScenarioDetailView.as_view(), name="scenario-detail"),
+    path("scenarios/<slug:slug>/attribution/", views.ScenarioAttributionView.as_view(), name="scenario-attribution"),
+    path("controls/attribution/", views.AttributionOverviewView.as_view(), name="controls-attribution"),
 
     path("runs/", views.RunCreateView.as_view(), name="runs"),
     path("runs/compare/", views.RunCompareView.as_view(), name="runs-compare"),

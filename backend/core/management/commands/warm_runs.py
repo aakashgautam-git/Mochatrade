@@ -1,5 +1,6 @@
 """Pre-execute every scenario in both control modes against the active policy,
-and model what each run would owe, so Recalibrate reads rather than re-runs.
+model what each run would owe, so Recalibrate reads rather than re-runs, and
+measure what each control is worth (the full stack without it).
 
 A judge clicking through six scenarios should read from the database, not wait
 for twelve simulations. Idempotent: a run already cached for the current policy
@@ -7,6 +8,7 @@ fingerprint is skipped, so this is cheap to call on every seed.
 """
 from __future__ import annotations
 
+import os
 import time
 
 from django.core.management.base import BaseCommand, CommandError
@@ -49,4 +51,21 @@ class Command(BaseCommand):
                 f"Warm: {executed} executed, {cached} already cached, policy "
                 f"{policy.version}, {time.perf_counter() - started:.1f}s total."
             )
+        )
+
+        # What each control is worth: alone, and last into the full stack.
+        started = time.perf_counter()
+        workers = max(1, min(8, os.cpu_count() or 1))
+        ran = runner.warm_attribution(rows, policy=policy, workers=workers)
+        self.stdout.write(f"  worth  {ran} attribution runs on {workers} worker(s), {time.perf_counter() - started:.1f}s")
+        for row in rows:
+            t0 = time.perf_counter()
+            result = runner.attribution(row, policy=policy)
+            best = result["controls"][0]
+            self.stdout.write(
+                f"  worth  {row.slug:24s} {len(result['controls'])} controls  "
+                f"most valuable: {best['control']}  {(time.perf_counter() - t0) * 1000:7.0f} ms"
+            )
+        self.stdout.write(
+            self.style.SUCCESS(f"Attribution: {len(rows)} scenarios, {time.perf_counter() - started:.1f}s total.")
         )

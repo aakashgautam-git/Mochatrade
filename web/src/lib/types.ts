@@ -931,3 +931,54 @@ export interface Comparison {
     adl_pct: number;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Attribution: what each control is worth
+// ---------------------------------------------------------------------------
+
+export interface AttributionMetrics {
+  attributable_loss: MoneyString;
+  user_loss: MoneyString;
+  accounts_liquidated: number;
+  unnecessary_liquidations: number;
+  adl_accounts: number;
+}
+
+export interface AttributionRow {
+  control: string;
+  label: string;
+  kills: string;
+  /** Why the engine cannot show this control's effect yet; empty when it can. */
+  not_modelled: string;
+  /** Saved by this control on its own, against no controls. */
+  alone: AttributionMetrics;
+  /** Lost by removing it from the full stack. */
+  last_in: AttributionMetrics;
+}
+
+/** GET /api/scenarios/{slug}/attribution/ */
+export interface ScenarioAttribution {
+  scenario_slug: string;
+  scenario_name: string;
+  policy_version: string;
+  seed: number;
+  full: AttributionMetrics;
+  none: AttributionMetrics;
+  controls: AttributionRow[];
+}
+
+export interface AttributionTotal {
+  control: string;
+  label: string;
+  kills: string;
+  not_modelled: string;
+  alone: AttributionMetrics;
+  last_in: AttributionMetrics;
+}
+
+/** GET /api/controls/attribution/ */
+export interface AttributionOverview {
+  policy_version: string;
+  scenarios: ScenarioAttribution[];
+  totals: AttributionTotal[];
+}

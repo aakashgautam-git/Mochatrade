@@ -22,6 +22,7 @@ from django.utils.safestring import mark_safe
 from riskengine.indian import inr_text
 
 from .models import (
+    ControlAttribution,
     Claim,
     ClaimStatus,
     CommsUpdate,
@@ -248,6 +249,22 @@ class SimRunAdmin(admin.ModelAdmin):
     @admin.display(description="Progress")
     def progress(self, obj: SimRun) -> str:
         return f"{obj.current_tick}/{obj.total_ticks} ({obj.progress_pct}%)"
+
+
+@admin.register(ControlAttribution)
+class ControlAttributionAdmin(admin.ModelAdmin):
+    """A derived cache: read it, never edit it. Delete rows to force a re-run."""
+
+    list_display = ("__str__", "policy", "created_at")
+    list_select_related = ("scenario", "policy")
+    list_filter = ("scenario", "control", "mode")
+    readonly_fields = ("scenario", "policy", "policy_fingerprint", "seed", "control", "summary", "created_at")
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: object = None) -> bool:
+        return False
 
 
 @admin.register(SimAccount)

@@ -38,7 +38,14 @@ from django.db.models import Max
 from django.utils import timezone
 
 from riskengine import classifier, remediation
-from riskengine.controls import ActionKind, ControlStack, OperatorAction
+from riskengine.controls import (
+    CONTROL_KILLS,
+    CONTROL_LABELS,
+    CONTROL_NOT_MODELLED,
+    ActionKind,
+    ControlStack,
+    OperatorAction,
+)
 from riskengine.indian import inr_text
 from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
@@ -50,6 +57,7 @@ from .models import (
     ActionType,
     Claim,
     ClaimStatus,
+    ControlAttribution,
     DepthSnapshot,
     Incident,
     IncidentAction,
@@ -770,6 +778,117 @@ def open_claims(incident, engine: Engine, *, actor: str, rationale: str):
             reversible=True,
         )
     return plan
+
+
+# --------------------------------------------------------------------------
+# Attribution: what each control is worth
+# --------------------------------------------------------------------------
+
+ATTRIBUTION_METRICS = ("attributable_loss", "user_loss", "accounts_liquidated", "unnecessary_liquidations", "adl_accounts")
+"""Attributable loss is the number the controls are graded on (RunSummary);
+the counts say how many people it touched."""
+
+MONEY_METRICS = frozenset({"attributable_loss", "user_loss"})
+
+
+def _stack_for(name: str, mode: str) -> ControlStack:
+    return ControlStack.none().with_only(name) if mode == ControlAttribution.ALONE else ControlStack.full().without(name)
+
+
+def _attribution_summary(key: str, params: Any, name: str, mode: str, seed: int) -> dict[str, Any]:
+    """One attribution run. Top-level and pure, so a process pool can run it."""
+    return Engine(by_key(key), params, _stack_for(name, mode), seed=seed).run().summary.as_dict()
+
+
+def warm_attribution(rows: list[Scenario], *, policy: RiskPolicy, workers: int = 1) -> int:
+    """Compute every missing attribution run for these scenarios, in parallel
+    when `workers` > 1 (the engine is pure, so runs share nothing). Returns how
+    many runs were executed."""
+    params = params_for(policy)
+    key = fingerprint(params)
+    todo: list[tuple[Scenario, str, str, int]] = []
+    for row in rows:
+        seed = int(engine_scenario(row).seed)
+        have = set(
+            ControlAttribution.objects.filter(scenario=row, policy_fingerprint=key, seed=seed)
+            .values_list("control", "mode")
+        )
+        for name in ControlStack.full().enabled:
+            for mode in (ControlAttribution.ALONE, ControlAttribution.LAST_IN):
+                if (name, mode) not in have:
+                    todo.append((row, name, mode, seed))
+    if not todo:
+        return 0
+    jobs = [(engine_scenario(row).key, params, name, mode, seed) for row, name, mode, seed in todo]
+    if workers > 1:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            summaries = list(pool.map(_attribution_summary, *zip(*jobs)))
+    else:
+        summaries = [_attribution_summary(*job) for job in jobs]
+    ControlAttribution.objects.bulk_create([
+        ControlAttribution(
+            scenario=row, policy=policy, policy_fingerprint=key, seed=seed,
+            control=name, mode=mode, summary=summary,
+        )
+        for (row, name, mode, seed), summary in zip(todo, summaries)
+    ])
+    return len(todo)
+
+
+def attribution(row: Scenario, *, policy: RiskPolicy | None = None) -> dict[str, Any]:
+    """Every control's value on one scenario under the active policy, two ways:
+    alone (only it on, against no controls) and last in (the full stack without
+    it, against the full stack). Research 8 ranks its changes by damage
+    reduction per engineering-week; this is the damage-reduction half, measured
+    on our own engine. Cached per (scenario, parameter values, seed, control,
+    mode), like runs."""
+    policy = policy or active_policy()
+    params = params_for(policy)
+    key = fingerprint(params)
+    scenario = engine_scenario(row)
+    seed = int(scenario.seed)
+    full = get_or_run(row, controls_enabled=True, policy=policy)[0].result_summary
+    none = get_or_run(row, controls_enabled=False, policy=policy)[0].result_summary
+    have = {
+        (a.control, a.mode): a.summary
+        for a in ControlAttribution.objects.filter(scenario=row, policy_fingerprint=key, seed=seed)
+    }
+
+    def summary(name: str, mode: str) -> dict[str, Any]:
+        if (name, mode) not in have:
+            have[(name, mode)] = ControlAttribution.objects.create(
+                scenario=row, policy=policy, policy_fingerprint=key, seed=seed, control=name, mode=mode,
+                summary=_attribution_summary(scenario.key, params, name, mode, seed),
+            ).summary
+        return have[(name, mode)]
+
+    def metrics(values: dict[str, float]) -> dict[str, Any]:
+        return {m: money(values[m]) if m in MONEY_METRICS else values[m] for m in ATTRIBUTION_METRICS}
+
+    rows: list[dict[str, Any]] = []
+    for name in ControlStack.full().enabled:
+        alone = summary(name, ControlAttribution.ALONE)
+        without = summary(name, ControlAttribution.LAST_IN)
+        rows.append({
+            "control": name,
+            "label": CONTROL_LABELS[name],
+            "kills": CONTROL_KILLS[name],
+            "not_modelled": CONTROL_NOT_MODELLED.get(name, ""),
+            "alone": metrics({m: none[m] - alone[m] for m in ATTRIBUTION_METRICS}),
+            "last_in": metrics({m: without[m] - full[m] for m in ATTRIBUTION_METRICS}),
+        })
+    rows.sort(key=lambda r: Decimal(r["alone"]["attributable_loss"]), reverse=True)
+    return {
+        "scenario_slug": row.slug,
+        "scenario_name": row.name,
+        "policy_version": policy.version,
+        "seed": seed,
+        "full": metrics(full),
+        "none": metrics(none),
+        "controls": rows,
+    }
 
 
 def _next_version() -> str:

@@ -1,5 +1,7 @@
 /** REST client. Plain fetch against /api, proxied to Django by Vite in dev. */
 import type {
+  AttributionOverview,
+  ScenarioAttribution,
   ActionRequest,
   ActionResponse,
   Claim,
@@ -71,6 +73,11 @@ export const fetchActivePolicy = () =>
 
 /** GET /api/scenarios/ returns a bare list, read from the database. */
 export const fetchScenarios = () => get<ScenarioListItem[]>("/api/scenarios/");
+
+export const fetchScenarioAttribution = (slug: string) =>
+  get<ScenarioAttribution>(`/api/scenarios/${slug}/attribution/`);
+
+export const fetchAttributionOverview = () => get<AttributionOverview>("/api/controls/attribution/");
 
 export const fetchComparison = (slug: string) =>
   get<Comparison>(`/api/compare/${slug}/`);

@@ -207,3 +207,102 @@ export const WHAT_KEEPS_USERS = [
 /** Research 4.4: what running our own HIP-3 market costs us when the oracle is wrong. */
 export const HIP3_STAKE =
   "We post 500k HYPE for at least 183 days and face validator-voted slashing: up to 100% for invalid state transitions or prolonged downtime, up to 50% for brief downtime, up to 20% for network degradation. Slashed stake is burned, not paid to users. A bad oracle is not just a refund problem for us; it is a slashing event.";
+
+/** Research 0: the levers the generic answer assumes, and whether MochaTrade has them. */
+export const LEVERS: Array<{ lever: string; answer: string; ours: boolean }> = [
+  { lever: "Pause the matching engine", answer: "No. HyperCore keeps matching.", ours: false },
+  { lever: "Roll back or bust trades", answer: "No. Fills are on-chain and final.", ours: false },
+  { lever: "Halt the venue", answer: "Only for a market we deployed under HIP-3, and haltTrading \"cancels all orders and settles positions to the current mark price\": the nuclear option, not step one.", ours: false },
+  { lever: "Change the mark price", answer: "Only on our own HIP-3 market, where we set the oracle, and where a bad oracle or downtime is slashable up to 100% of a 500k HYPE stake.", ours: false },
+  { lever: "Our app, API, leverage menu, margin UI, UPI rails, INR ledger, comms, money", answer: "Yes, 100%.", ours: true },
+];
+
+/** Research 0: how the business is built. */
+export const BUILDER_CODES =
+  "Front-ends on Hyperliquid earn through builder codes. The agent wallet \"can only execute trades and cannot move user funds.\"";
+
+/** Research 1: why "check it against Binance" breaks on this product. */
+export const OFF_HOURS =
+  "Our flagship is US stock perps, trading 24/7, in IST. US cash equities are open 19:00–01:30 IST; outside that there is no spot market to compare against, and during off-hours trade.xyz becomes the primary venue. A 15% wick on a TSLA perp at 04:00 IST on a Sunday has no external reference price at all, and a stock can legitimately gap 20% on an earnings release while the cash market is shut. So \"abnormal\" is defined before the event, against a composite we publish, and when that composite cannot be built we cut leverage and widen bands before the event rather than argue after it.";
+
+export interface Amplifier {
+  n: number;
+  title: string;
+  evidence: string;
+  /** The controls in the engine that act on it. */
+  controls: string[];
+}
+
+/** Research 2: the five amplifiers. The simulator models each one, and each has a control that can be switched off. */
+export const AMPLIFIERS: Amplifier[] = [
+  { n: 1, title: "The liquidation engine becomes the largest seller",
+    evidence: "BitMEX, March 2020: when a DDoS knocked the engine offline, the price recovered from ~$3,900 to ~$5,300, because the biggest forced seller vanished.",
+    controls: ["liquidation_throttle", "two_stage_liquidation", "margin_grace_window"] },
+  { n: 2, title: "Liquidity evaporates exactly when it is needed",
+    evidence: "October 2025: BTC top-of-book depth shrank by more than 90%. The book you stress-test in calm markets does not exist in the crash.",
+    controls: ["liquidation_throttle"] },
+  { n: 3, title: "The price feed becomes the weapon",
+    evidence: "October 2025: USDe printed ~$0.65 on Binance while holding ~$1.00 everywhere else; positions that were solvent at cross-venue prices were liquidated on a venue-local one.",
+    controls: ["oracle_anchored_mark", "oracle_health_monitor"] },
+  { n: 4, title: "Cross-margin turns one bad asset into a portfolio wipeout",
+    evidence: "Unified accounts get tied to their weakest asset: a depegged collateral token liquidated whole portfolios whose individual positions were healthy.",
+    controls: ["isolated_margin_default"] },
+  { n: 5, title: "ADL turns a user problem into a trust problem",
+    evidence: "Auto-deleveraging force-closes winning positions at the bankruptcy price, converting a hedged portfolio into a naked one during stress.",
+    controls: ["two_stage_liquidation", "liquidation_throttle"] },
+];
+
+/** Research 2: the ADL findings and the trilemma. */
+export const ADL_FINDINGS =
+  "A December 2025 arXiv paper (2512.01112) found that on 10 October 2025 Hyperliquid's queue-based ADL imposed roughly $653M in unnecessary haircuts on winning traders — about 28× overutilisation against the optimal policy — likely contributing to the subsequent ~50% loss of open interest. It also proves a trilemma: no ADL policy can deliver exchange solvency, trader fairness and long-run revenue at the same time. You have to choose, and say which you chose.";
+
+/** Research 4.4: the rest of what running a HIP-3 market means. */
+export const HIP3_RULES = [
+  "The deployer sets the oracle, the contract spec, max leverage and the fee share, and can call haltTrading, which cancels all orders and settles at the current mark.",
+  "Enabling cross margin is irreversible, and it is prohibited for assets expected to move 50% in a day more than once a month. A move of more than 50% in a day triggers validator review for slashing.",
+  "Each dex gets an on-chain backstop liquidator that absorbs undercollateralised positions, reducing the need for ADL.",
+  "Our oracle quality is collateralised by 500,000 HYPE: we are the most exposed party to our own wick.",
+];
+
+export interface RankedChange {
+  rank: number;
+  change: string;
+  effort: string;
+  /** Engineering weeks, a working week being five days. Null when ongoing. */
+  weeks: number | null;
+  kills: string;
+  /** Controls in the engine that implement it. Empty for policy and product changes. */
+  controls: string[];
+}
+
+/** Research 8: a short set of changes, ranked by damage reduction per engineering-week. */
+export const RANKED_CHANGES: RankedChange[] = [
+  { rank: 1, change: "Mark = oracle-anchored composite with clamp and staleness kill. Never LTP.", effort: "1 wk", weeks: 1, kills: "Amplifier 3", controls: ["oracle_anchored_mark"] },
+  { rank: 2, change: "Oracle health monitor → automatic reduce-only and liquidation pause on degradation", effort: "1 wk", weeks: 1, kills: "Amplifier 3", controls: ["oracle_health_monitor"] },
+  { rank: 3, change: "Liquidation TWAP throttle + maximum participation rate of resting depth", effort: "2 wks", weeks: 2, kills: "Amplifier 1", controls: ["liquidation_throttle"] },
+  { rank: 4, change: "Time-of-day leverage caps for equity perps (50x RTH → 5x off-hours)", effort: "3 d", weeks: 0.6, kills: "The product's own worst vector", controls: ["time_of_day_leverage_caps"] },
+  { rank: 5, change: "Margin-call grace window + one-tap top-up + pre-funded UPI buffer", effort: "2 wks", weeks: 2, kills: "Amplifiers 1 and 5, and the UPI dependency", controls: ["margin_grace_window", "upi_prefunded_credit"] },
+  { rank: 6, change: "Two-stage partial liquidation (market first, backstop only below ⅔ MM)", effort: "2 wks", weeks: 2, kills: "Amplifier 1", controls: ["two_stage_liquidation"] },
+  { rank: 7, change: "Published APE policy + funded Incident Reserve", effort: "1 wk (legal/treasury)", weeks: 1, kills: "The trust crisis", controls: [] },
+  { rank: 8, change: "Status page + automated incident comms + evidence snapshotter", effort: "3 d", weeks: 0.6, kills: "The trust crisis", controls: [] },
+  { rank: 9, change: "Isolated-margin default for long-tail; haircuts that scale with volatility", effort: "1 wk", weeks: 1, kills: "Amplifier 4", controls: ["isolated_margin_default"] },
+  { rank: 10, change: "Quarterly game-day: run this exact playbook against the simulator", effort: "ongoing", weeks: null, kills: "Everything", controls: [] },
+];
+
+/** Research 8, the note under the table. */
+export const RANKED_NOTE =
+  "Note how many are product decisions, not engineering: #4 and #7 are the highest-leverage items and neither requires a matching engine. That is the honest answer to \"realism for a small team.\"";
+
+/** Research 10: the questions a judge will ask, and the answers. */
+export const JUDGE_QUESTIONS: Array<{ q: string; a: string }> = [
+  { q: "Isn't compensating just moral hazard?",
+    a: "It would be, if it were discretionary. It isn't: it's a published test with a counterfactual, a tier table, a cap, and an explicit exclusion for normal trading losses. OKX's 2019 notice did exactly this: compensate the error window, exclude \"customers who experienced trading losses under normal circumstances.\"" },
+  { q: "You can't afford Binance's $283M.",
+    a: "Correct, which is why the cap is published in advance and the reserve is visible and pre-funded. An honest finite promise beats an implied infinite one." },
+  { q: "Why not just halt?",
+    a: "Because we don't own the engine, and because haltTrading settles everyone at the mark we are currently disputing. Halting is how you turn a pricing dispute into a settlement dispute." },
+  { q: "Why not roll back?",
+    a: "We can't (on-chain), we shouldn't (SAT/Emkay, CFTC/FIA), and JELLY shows what it costs when you do." },
+  { q: "Your simulator's numbers are made up.",
+    a: "The parameters are our proposal; the mechanisms are Binance's, CME's and Hyperliquid's published specs; and the engine is deterministic and unit-tested, so any judge can change a parameter and watch the result move." },
+];

@@ -62,6 +62,22 @@ def build(ceiling: float = 50.0, **kw: object) -> list:
     )
 
 
+def test_the_isolated_default_changes_the_mode_and_nothing_else() -> None:
+    """Same seed, same book: the control may only overrule each user's margin
+    choice. It used to skip a draw, which reshuffled every later account."""
+    def book(isolated_default: bool) -> list:
+        return PopulationSpec().build(
+            Rng(7), price=36_000.0, leverage_ceiling=50.0, tier_leverage=P, isolated_default=isolated_default,
+        )
+
+    cross, isolated = book(False), book(True)
+    assert [(a.id, a.side, a.qty, a.leverage, a.collateral) for a in cross] == [
+        (a.id, a.side, a.qty, a.leverage, a.collateral) for a in isolated
+    ]
+    assert {a.mode.value for a in isolated} == {"isolated"}
+    assert {a.mode.value for a in cross} == {"cross", "isolated"}
+
+
 def test_population_matches_the_published_preset() -> None:
     accounts = build()
     assert len(accounts) == 1200

@@ -71,7 +71,8 @@ from .scenario import Scenario
 #: 5 = per-fill liquidation records and per-tick depth snapshots.
 #: 6 = circuit-breaker bounds fixed (behaviour change; forces re-warm).
 #: 7 = log lines print prices with Indian digit grouping.
-FRAME_SCHEMA = 7
+#: 8 = the isolated-margin default no longer shifts the population's draws.
+FRAME_SCHEMA = 8
 
 #: Depth snapshot shape: ten 10 bps buckets per side covers exactly the 1% band
 #: the throttle's participation cap is measured against, so the ladder shows the

@@ -758,3 +758,50 @@ class PublicIncidentSerializer(serializers.Serializer):
     resolved_at = serializers.DateTimeField(allow_null=True)
     state = serializers.CharField()
     updates = PublicStatusUpdateSerializer(many=True)
+
+
+# --------------------------------------------------------------------------
+# Attribution: what each control is worth
+# --------------------------------------------------------------------------
+
+class AttributionMetricsSerializer(serializers.Serializer):
+    attributable_loss = serializers.CharField()
+    user_loss = serializers.CharField()
+    accounts_liquidated = serializers.IntegerField()
+    unnecessary_liquidations = serializers.IntegerField()
+    adl_accounts = serializers.IntegerField()
+
+
+class AttributionRowSerializer(serializers.Serializer):
+    control = serializers.CharField()
+    label = serializers.CharField()
+    kills = serializers.CharField()
+    not_modelled = serializers.CharField(allow_blank=True)
+    alone = AttributionMetricsSerializer(help_text="Saved by this control alone, against no controls.")
+    last_in = AttributionMetricsSerializer(help_text="Lost by removing it from the full stack.")
+
+
+class ScenarioAttributionSerializer(serializers.Serializer):
+    scenario_slug = serializers.CharField()
+    scenario_name = serializers.CharField()
+    policy_version = serializers.CharField()
+    seed = serializers.IntegerField()
+    full = AttributionMetricsSerializer()
+    none = AttributionMetricsSerializer()
+    controls = AttributionRowSerializer(many=True)
+
+
+class AttributionTotalSerializer(serializers.Serializer):
+    control = serializers.CharField()
+    label = serializers.CharField()
+    kills = serializers.CharField()
+    not_modelled = serializers.CharField(allow_blank=True)
+    alone = AttributionMetricsSerializer()
+    last_in = AttributionMetricsSerializer()
+
+
+class AttributionOverviewSerializer(serializers.Serializer):
+    policy_version = serializers.CharField()
+    scenarios = ScenarioAttributionSerializer(many=True)
+    totals = AttributionTotalSerializer(many=True)
+

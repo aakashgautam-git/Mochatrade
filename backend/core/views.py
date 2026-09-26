@@ -41,6 +41,8 @@ from .models import (
     Scenario,
 )
 from .serializers import (
+    AttributionOverviewSerializer,
+    ScenarioAttributionSerializer,
     ActionRequestSerializer,
     ClaimDecisionSerializer,
     ClaimsResponseSerializer,
@@ -158,6 +160,47 @@ class ScenarioDetailView(APIView):
 # --------------------------------------------------------------------------
 # Runs
 # --------------------------------------------------------------------------
+
+class ScenarioAttributionView(APIView):
+    """GET /api/scenarios/{slug}/attribution/ -- what each control is worth on
+    this scenario, alone and last into the full stack."""
+
+    def get(self, request: Request, slug: str) -> Response:
+        row = _scenario_or_400(slug)
+        if isinstance(row, Response):
+            return row
+        return Response(ScenarioAttributionSerializer(runner.attribution(row)).data)
+
+
+class AttributionOverviewView(APIView):
+    """GET /api/controls/attribution/ -- every scenario's attribution and each
+    control's total across all of them, for research 8's ranking."""
+
+    def get(self, request: Request) -> Response:
+        rows = list(Scenario.objects.select_related("instrument").order_by("slug"))
+        per = [runner.attribution(row) for row in rows]
+        zero = {m: Decimal("0") if m in runner.MONEY_METRICS else 0 for m in runner.ATTRIBUTION_METRICS}
+        totals: dict[str, dict[str, Any]] = {}
+        for sc in per:
+            for c in sc["controls"]:
+                t = totals.setdefault(c["control"], {
+                    "control": c["control"], "label": c["label"], "kills": c["kills"],
+                    "not_modelled": c["not_modelled"], "alone": dict(zero), "last_in": dict(zero),
+                })
+                for mode in ("alone", "last_in"):
+                    for m in runner.ATTRIBUTION_METRICS:
+                        v = c[mode][m]
+                        t[mode][m] += Decimal(v) if m in runner.MONEY_METRICS else v
+        ordered = sorted(totals.values(), key=lambda t: t["alone"]["attributable_loss"], reverse=True)
+        for t in ordered:
+            for mode in ("alone", "last_in"):
+                t[mode] = {m: runner.money(v) if m in runner.MONEY_METRICS else v for m, v in t[mode].items()}
+        return Response(AttributionOverviewSerializer({
+            "policy_version": runner.active_policy().version,
+            "scenarios": per,
+            "totals": ordered,
+        }).data)
+
 
 class RunCreateView(APIView):
     """POST /api/runs/ -- run to completion (or serve from cache), one shot."""

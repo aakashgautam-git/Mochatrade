@@ -646,6 +646,40 @@ class SimRun(models.Model):
         return round(100.0 * self.current_tick / self.total_ticks, 1)
 
 
+class ControlAttribution(models.Model):
+    """What one control is worth on one scenario, measured two ways.
+
+    ALONE: the scenario with only this control on, against no controls -- what
+    shipping it by itself buys. LAST_IN: the full stack with this control
+    removed, against the full stack -- what it adds once everything else is
+    there. Controls overlap, so a control can be worth a lot alone and nothing
+    last in; both are shown. A cache keyed like a run: same scenario, seed and
+    parameter values, same answer.
+    """
+
+    ALONE = "alone"
+    LAST_IN = "last_in"
+
+    scenario = models.ForeignKey(Scenario, on_delete=models.CASCADE, related_name="attributions")
+    policy = models.ForeignKey(RiskPolicy, on_delete=models.CASCADE, related_name="attributions")
+    policy_fingerprint = models.CharField(max_length=32, db_index=True)
+    seed = models.BigIntegerField()
+    control = models.CharField(max_length=40)
+    mode = models.CharField(
+        max_length=8, choices=((ALONE, "Only this control on"), (LAST_IN, "Full stack without it")),
+    )
+    summary = models.JSONField(default=dict, blank=True, help_text="The run summary for that stack.")
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("scenario", "control", "mode")
+        verbose_name = "control attribution"
+        unique_together = (("scenario", "policy_fingerprint", "seed", "control", "mode"),)
+
+    def __str__(self) -> str:
+        return f"{self.scenario.slug}: {self.control} ({self.get_mode_display().lower()})"
+
+
 class SimAccount(models.Model):
     """A synthetic trader inside a run. The unit a claim is decided about."""
 

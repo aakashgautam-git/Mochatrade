@@ -27,6 +27,11 @@ def _worst(statuses: list[str]) -> str:
     return max(statuses, key=lambda s: _RANK[s]) if statuses else OK
 
 
+HIP3_REVIEW_MOVE_PCT = 50.0
+"""Hyperliquid's HIP-3 rule, not our parameter (research 4.4): a move of more
+than 50% in a day triggers validator review of the deployer for slashing."""
+
+
 def _signal(label: str, value: str, status: str) -> dict[str, str]:
     return {"label": label, "value": value, "status": status}
 
@@ -76,6 +81,13 @@ def triage(engine: Engine) -> list[dict[str, Any]]:
         _signal("Trading", "paused" if f.trading_paused else "continuous",
                 WARN if f.trading_paused else OK),
     ]
+    start = engine.frames[0].mark
+    if start:
+        move = max(abs(fr.mark / start - 1.0) for fr in engine.frames) * 100.0
+        market.append(_signal(
+            "Largest move vs HIP-3 review line", f"{move:.1f}% of {HIP3_REVIEW_MOVE_PCT:.0f}%",
+            FAIL if move > HIP3_REVIEW_MOVE_PCT else OK,
+        ))
     market_status = _worst([s["status"] for s in market])
 
     # --- L1 broker ---------------------------------------------------------

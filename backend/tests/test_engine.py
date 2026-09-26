@@ -133,10 +133,12 @@ def test_upi_prefunded_credit_saves_accounts_the_late_settlement_would_not() -> 
     """Class E. The most India-specific control in the brief.
 
     Measured on what the control is FOR: accounts liquidated while their UPI
-    deposit was still in flight. Total liquidations used to be the assertion,
-    but once velocity pauses escalate they absorb most of the cascade and the
-    total stops being a sensitive signal -- 16 against 16 -- while the class E
-    count still falls. The total must not get worse.
+    deposit was still in flight, and measured alone. Last into the full stack
+    it adds nothing on this seed: the velocity and breaker pauses already hold
+    the cascade until the deposits land. That used to look otherwise only
+    because switching the isolated-margin default reshuffled the population,
+    so the two runs compared different books. The Simulator shows both views.
+    The total must not get worse.
     """
     scenario = by_key("upi_settlement_delay")
 
@@ -149,12 +151,14 @@ def test_upi_prefunded_credit_saves_accounts_the_late_settlement_would_not() -> 
         ]
         return result.summary, len(hit)
 
-    with_credit, e_with = in_flight_losses(ControlStack.full())
-    without, e_without = in_flight_losses(ControlStack.full().without("upi_prefunded_credit"))
+    with_credit, e_with = in_flight_losses(ControlStack.none().with_only("upi_prefunded_credit"))
+    without, e_without = in_flight_losses(ControlStack.none())
     assert with_credit.upi_credits_issued > 0
     assert without.upi_credits_issued == 0
     assert e_with < e_without
     assert with_credit.accounts_liquidated <= without.accounts_liquidated
+    _, e_full = in_flight_losses(ControlStack.full())
+    assert e_full <= e_with
 
 
 def test_time_of_day_cap_applies_to_equity_perps_only() -> None:

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Play, Pause, RotateCcw } from "lucide-react";
 
+import { ControlWorth } from "../components/ControlWorth";
 import { PauseNote } from "../components/PauseNote";
 
 import { fetchActivePolicy, fetchCompare, fetchScenarios, parseMoney, rupees } from "../lib/api";
@@ -363,6 +364,8 @@ export function Simulator() {
             Same shock, same seed: {off.summary.accounts_liquidated.toLocaleString("en-IN")} accounts liquidated and {rupees(parseMoney(off.summary.user_loss_inr))} lost without controls, versus {on.summary.accounts_liquidated.toLocaleString("en-IN")} and {rupees(parseMoney(on.summary.user_loss_inr))} with them.
           </p>
         </div>
+
+        <ControlWorth slug={scenarioSlug} />
 
         <div className="grid gap-8 lg:grid-cols-2">
           <div>
