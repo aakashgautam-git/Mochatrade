@@ -82,7 +82,14 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > scenario's labelled time and every stamp sits on its own drill clock. Money
 > is Indian-format everywhere through one helper (`riskengine/indian.py`).
 >
-> **NEXT: PHASE 13 — Final pass: production build, click-through, docs.**
+> **PHASE 13 — FINAL PASS (complete).** `make build` is clean: vendor code
+> is split into long-lived chunks (react, charts, state, icons), so no chunk
+> tops 500 kB. `make preview` serves the built bundle against the backend.
+> Every nav section plus `/status`, `/demo` and `/kitchen-sink` was loaded
+> headless on the production build, and each page's main interaction was
+> exercised: no page or console errors.
+>
+> **NEXT: the review against the research (`REVIEW.md`) and its fixes.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -113,7 +120,7 @@ trustworthy engine more than it needs a database.
 | 10 | Comms | Done |
 | 11 | Incident report | **Done** |
 | 12 | Seed data + polish | **Done** |
-| 13 | Final pass — production build, click-through, docs | **Next** |
+| 13 | Final pass — production build, click-through, docs | **Done** |
 
 Every phase updates this marker and ends in a commit. Do not start the next
 phase without being asked.

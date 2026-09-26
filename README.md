@@ -61,6 +61,7 @@ cd web && npm install && npm run dev
 | `make test` | pytest suite, including the determinism and engine-purity tests |
 | `make typecheck` | TypeScript strict check |
 | `make build` | Production build of the web app |
+| `make preview` | Serve the production build on :4173 against the backend on :8000 |
 | `make seed` | Seed the policy and scenarios, pre-run all twelve comparisons, then the three demo drills |
 | `make clean` | Remove venv, node_modules, caches and the local database |
 

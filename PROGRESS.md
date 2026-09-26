@@ -42,3 +42,8 @@ Three lines per phase: done / deviations / issues.
 - Deviations: the seed re-stamps each record at declared_at + its drill second (the war room log's own mapping) because a drill plays an hour in seconds; resolved drills are declared at their scenario's labelled IST time. The handover's ship date is committed from the research's effort for the matching change (section 8: #1, #5, #9). A comms publish during a live market is now queued to the engine too (a rebuild replays it; before, the rebuilt frame log differed). FRAME_SCHEMA 7 (Indian grouping in engine log lines).
 - Issues: none open.
 
+## Phase 13: Final pass
+- Done: `make build` clean (tsc + vite); vendor split into react / charts / state / icons chunks, largest 416 kB (112 kB gzip), no size warning; `make preview` serves the build with the /api proxy. Headless click-through of all 11 routes on the production build, plus the main interaction on each (simulator plays, account select, claims filter, template fill + guardrail block, report incident switch, war-room declare, step and Protect Switch): all pass, no page or console errors.
+- Deviations: ARCHITECTURE.md had no Phase 13 row; the final pass HANDOFF.md described (build, click-through, docs) is taken as Phase 13. The final docs update runs after the research review.
+- Issues: none open. Google Fonts cannot load inside the cloud sandbox (proxy), which is environmental; the app falls back to system fonts there.
+

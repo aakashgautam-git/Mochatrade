@@ -14,7 +14,7 @@ PY ?= python3.13
 NPM := npm_config_cache=../.cache/npm npm
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-backend setup-web dev backend web migrate seed test test-engine test-web typecheck build clean
+.PHONY: help setup setup-backend setup-web dev backend web migrate seed test test-engine test-web typecheck build preview clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,6 +65,9 @@ typecheck: ## TypeScript strict check
 
 build: ## Production build of the web app
 	cd web && $(NPM) run build
+
+preview: ## Serve the production build on :4173 (run `make backend` alongside)
+	cd web && $(NPM) run preview
 
 clean: ## Remove venv, node_modules, caches and the local database
 	rm -rf backend/.venv backend/db.sqlite3 backend/.pytest_cache
