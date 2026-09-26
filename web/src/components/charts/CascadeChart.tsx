@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { ChartLegend } from "./ChartLegend";
 import { ChartTooltip } from "./ChartTooltip";
@@ -7,6 +7,7 @@ import { axisTick, minuteTicks, useChartTheme } from "./useChartTheme";
 
 export interface CascadePoint {
   t: number;
+  partial: number;
   market: number;
   backstop: number;
   adl: number;
@@ -19,7 +20,7 @@ export interface CascadePoint {
  * problem rather than a user problem should look different, not just be a
  * different colour.
  */
-export function CascadeChart({ data, height = 220 }: { data: CascadePoint[]; height?: number }) {
+export function CascadeChart({ data, cursor, height = 220 }: { data: CascadePoint[]; cursor?: number | undefined; height?: number }) {
   const theme = useChartTheme();
   const hatch = `hatch-${useId().replace(/:/g, "")}`;
 
@@ -28,6 +29,7 @@ export function CascadeChart({ data, height = 220 }: { data: CascadePoint[]; hei
       <div className="mb-4">
         <ChartLegend
           items={[
+            { label: "Partial — stage one, fee-free", color: theme.pos, mark: "area" },
             { label: "Market", color: theme.accent, mark: "area" },
             { label: "Backstop", color: theme.warn, mark: "area" },
             { label: "ADL — winners closed", color: theme.neg, mark: "hatch" },
@@ -54,8 +56,21 @@ export function CascadeChart({ data, height = 220 }: { data: CascadePoint[]; hei
               ticks={minuteTicks(data[data.length - 1]?.t ?? 0)}
               tickFormatter={(t: number) => `${Math.round(t / 60)}m`}
             />
-            <YAxis allowDecimals={false} tick={axisTick(theme)} tickLine={false} axisLine={false} width={40} />
-            <Tooltip cursor={{ stroke: theme.line }} content={<ChartTooltip theme={theme} format={(v) => `${v}`} />} />
+            <YAxis
+              tick={axisTick(theme)}
+              tickLine={false}
+              axisLine={false}
+              width={56}
+              tickFormatter={(v: number) => (v === 0 ? "0" : `${(v / 1_00_000).toFixed(1)}L`)}
+            />
+            <Tooltip
+              cursor={{ stroke: theme.line }}
+              content={<ChartTooltip theme={theme} format={(v) => `₹${(v / 1_00_000).toFixed(2)}L`} />}
+            />
+            {cursor !== undefined ? (
+              <ReferenceLine x={cursor} stroke={theme.textDim} strokeDasharray="4 4" isFront />
+            ) : null}
+            <Area type="stepAfter" dataKey="partial" name="Partial" stackId="w" stroke={theme.pos} fill={theme.pos} fillOpacity={0.3} isAnimationActive={false} />
             <Area type="stepAfter" dataKey="market" name="Market" stackId="w" stroke={theme.accent} fill={theme.accent} fillOpacity={0.3} isAnimationActive={false} />
             <Area type="stepAfter" dataKey="backstop" name="Backstop" stackId="w" stroke={theme.warn} fill={theme.warn} fillOpacity={0.3} isAnimationActive={false} />
             <Area type="stepAfter" dataKey="adl" name="ADL" stackId="w" stroke={theme.neg} fill={`url(#${hatch})`} isAnimationActive={false} />

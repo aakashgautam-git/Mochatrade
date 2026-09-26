@@ -5,6 +5,7 @@ import { useApp } from "./app/store";
 import { KitchenSink } from "./pages/KitchenSink";
 import { LegacyDemo } from "./pages/LegacyDemo";
 import { Placeholder } from "./pages/Placeholder";
+import { Simulator } from "./pages/Simulator";
 
 /**
  * Routes. `/demo` is the screening-round page, standalone and unchanged: the
@@ -17,6 +18,14 @@ export function App() {
   if (path === "/demo") return <LegacyDemo />;
 
   const section = NAV.find((s) => s.path === path);
+
+  if (path === "/simulator") {
+    return (
+      <Shell current={section} title="Simulator" isDocument={false}>
+        <Simulator />
+      </Shell>
+    );
+  }
 
   if (path === "/kitchen-sink") {
     return (

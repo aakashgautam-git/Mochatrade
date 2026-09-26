@@ -14,7 +14,7 @@ PY ?= python3.13
 NPM := npm_config_cache=../.cache/npm npm
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-backend setup-web dev backend web migrate seed test test-engine typecheck build clean
+.PHONY: help setup setup-backend setup-web dev backend web migrate seed test test-engine test-web typecheck build clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -55,6 +55,9 @@ test: ## Run the full pytest suite
 
 test-engine: ## Run only the pure-Python risk engine tests
 	cd backend && .venv/bin/pytest tests -k engine
+
+test-web: ## Run the pure-function simulator tests (Node)
+	cd web && $(NPM) test
 
 typecheck: ## TypeScript strict check
 	cd web && $(NPM) run typecheck

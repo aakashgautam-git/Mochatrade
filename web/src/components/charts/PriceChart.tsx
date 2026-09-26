@@ -4,6 +4,7 @@ import {
   Line,
   ReferenceArea,
   ReferenceDot,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -39,6 +40,8 @@ interface PriceChartProps {
   data: PricePoint[];
   regions?: ControlRegion[] | undefined;
   bursts?: LiquidationBurst[] | undefined;
+  cursor?: number | undefined;
+  auctions?: { t: number; price: number }[] | undefined;
   height?: number;
   domain?: [number, number] | undefined;
   showLegend?: boolean;
@@ -70,7 +73,7 @@ function niceTicks(lo: number, hi: number, count = 5): number[] {
  * lines differ by weight and dash as well as colour: the mark is the thick line
  * because it is the price that actually liquidates people.
  */
-export function PriceChart({ data, regions = [], bursts = [], height = 280, domain, showLegend = true }: PriceChartProps) {
+export function PriceChart({ data, regions = [], bursts = [], cursor, auctions = [], height = 280, domain, showLegend = true }: PriceChartProps) {
   const theme = useChartTheme();
 
   const legend: LegendItem[] = [
@@ -83,6 +86,7 @@ export function PriceChart({ data, regions = [], bursts = [], height = 280, doma
     const tone = spans[0]?.tone === "warn" ? theme.warn : theme.halt;
     legend.push({ label: spans.length > 1 ? `${label} ×${spans.length}` : label, color: tone, mark: "area" });
   }
+  if (auctions.length) legend.push({ label: "Reopening auction", color: theme.accent, mark: "diamond" as any });
   if (bursts.length) legend.push({ label: "Liquidation burst", color: theme.neg, mark: "triangle" });
 
   const biggest = Math.max(1, ...bursts.map((b) => b.count));
@@ -142,6 +146,9 @@ export function PriceChart({ data, regions = [], bursts = [], height = 280, doma
               cursor={{ stroke: theme.line }}
               content={<ChartTooltip theme={theme} format={price} />}
             />
+            {cursor !== undefined ? (
+              <ReferenceLine x={cursor} stroke={theme.textDim} strokeDasharray="4 4" isFront />
+            ) : null}
             <Line type="monotone" dataKey="oracle" name="Reference composite" stroke={theme.pos} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls={false} />
             <Line type="monotone" dataKey="ltp" name="Last traded" stroke={theme.neg} strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
             <Line type="monotone" dataKey="mark" name="Mark" stroke={theme.accent} strokeWidth={2.25} dot={false} isAnimationActive={false} />
@@ -170,6 +177,29 @@ export function PriceChart({ data, regions = [], bursts = [], height = 280, doma
                 />
               );
             })}
+            {auctions.map((a, i) => (
+              <ReferenceDot
+                key={`auction-${a.t}-${i}`}
+                x={a.t}
+                y={a.price}
+                ifOverflow="extendDomain"
+                shape={(props: { cx?: number; cy?: number }) => {
+                  const cx = props.cx ?? 0;
+                  const cy = props.cy ?? 0;
+                  const s = 4.5;
+                  return (
+                    <path
+                      d={`M${cx} ${cy - s} L${cx + s} ${cy} L${cx} ${cy + s} L${cx - s} ${cy} Z`}
+                      fill={theme.accent}
+                      stroke={theme.bg}
+                      strokeWidth={1}
+                    >
+                      <title>{`Reopening auction at T+${a.t}s`}</title>
+                    </path>
+                  );
+                }}
+              />
+            ))}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

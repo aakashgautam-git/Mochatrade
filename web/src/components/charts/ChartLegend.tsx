@@ -1,6 +1,6 @@
 import { Badge } from "../ui/Badge";
 
-export type LegendMark = "line" | "thick" | "dashed" | "area" | "hatch" | "triangle";
+export type LegendMark = "line" | "thick" | "dashed" | "area" | "hatch" | "triangle" | "diamond";
 
 export interface LegendItem {
   label: string;
@@ -24,6 +24,8 @@ function Sample({ color, mark }: { color: string; mark: LegendMark }) {
       );
     case "triangle":
       return <svg width="14" height="10" aria-hidden><path d="M3 2 L11 2 L7 9 Z" fill={color} /></svg>;
+    case "diamond":
+      return <svg width="14" height="10" aria-hidden><path d="M7 1 L11 5 L7 9 L3 5 Z" fill={color} /></svg>;
     default:
       return (
         <svg width="18" height="10" aria-hidden>

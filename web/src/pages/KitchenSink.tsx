@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   CirclePause,
-  FlaskConical,
   Inbox,
   OctagonX,
   Play,
@@ -20,10 +19,6 @@ import {
   DepthLadder,
   DeviationChart,
   PriceChart,
-  type CascadePoint,
-  type ControlRegion,
-  type DepthLevel,
-  type LiquidationBurst,
 } from "../components/charts";
 import {
   Badge,
@@ -48,7 +43,7 @@ import {
   type TimelineItem,
 } from "../components/ui";
 import { fetchActivePolicy, fetchCompare, parseMoney, rupees } from "../lib/api";
-import type { Tick } from "../lib/types";
+
 
 const SECTIONS = [
   ["state", "System state"],
@@ -454,67 +449,13 @@ function CountdownSection() {
 
 // ---------------------------------------------------------------------------
 
-/** Contiguous spans where a control was active, exactly as the engine recorded
- * them. Not merged: merging across short gaps turned 56 five-second pauses into
- * one eleven-minute band. `trading_paused` covers both the velocity pause and
- * the circuit breaker; frames do not yet say which. */
-function controlRegions(ticks: Tick[]): ControlRegion[] {
-  const kinds: Array<{ key: keyof Tick; label: string; tone: ControlRegion["tone"] }> = [
-    { key: "trading_paused", label: "Trading paused", tone: "halt" },
-    { key: "liquidations_paused", label: "Liq paused", tone: "halt" },
-    { key: "reduce_only", label: "Reduce-only", tone: "warn" },
-  ];
-  const out: ControlRegion[] = [];
-  for (const kind of kinds) {
-    const spans: Array<[number, number]> = [];
-    for (const t of ticks) {
-      if (!t[kind.key]) continue;
-      const last = spans[spans.length - 1];
-      if (last && t.tick - last[1] <= 1) last[1] = t.tick;
-      else spans.push([t.tick, t.tick]);
-    }
-    spans.forEach(([from, to]) => out.push({ from, to, label: kind.label, tone: kind.tone }));
-  }
-  return out;
-}
-
-function liquidationBursts(ticks: Tick[], n = 8): LiquidationBurst[] {
-  return ticks
-    .filter((t) => t.liquidated_this_tick > 0)
-    .sort((a, b) => b.liquidated_this_tick - a.liquidated_this_tick)
-    .slice(0, n)
-    .map((t) => ({ t: t.tick, price: t.mark, count: t.liquidated_this_tick }));
-}
 
 function every<T>(list: T[], n: number): T[] {
   const step = Math.max(1, Math.floor(list.length / n));
   return list.filter((_, i) => i % step === 0);
 }
 
-/** Fixture: a cascade that starts in the market, spills into the backstop and
- * ends in ADL. Smooth and deterministic -- jitter here made the chart look
- * broken rather than busy, and the fixture is for judging the chart, not the
- * engine. */
-const CASCADE: CascadePoint[] = Array.from({ length: 240 }, (_, t) => {
-  const bump = (centre: number, width: number, height: number) =>
-    Math.round(height * Math.exp(-(((t - centre) / width) ** 2)));
-  return { t, market: bump(70, 24, 14), backstop: bump(108, 20, 7), adl: bump(132, 12, 4) };
-});
-
-const LIQUIDITY = [1, 0.78, 0.55, 0.34, 0.18, 0.09, 0.06, 0.12, 0.3, 0.55, 0.8];
-
-function ladder(liquidity: number): { levels: DepthLevel[]; mid: number; spreadBps: number } {
-  const mid = 92_00_000 * (1 - (1 - liquidity) * 0.04);
-  const spreadBps = Math.min(250, 4 / Math.max(liquidity, 0.02));
-  const step = mid * 0.0005;
-  const levels: DepthLevel[] = [];
-  for (let i = 0; i < 7; i += 1) {
-    const size = 7_00_000 * Math.exp(-0.28 * i) * liquidity;
-    levels.push({ side: "ask", price: Math.round(mid + (i + 1) * step), size: size * (1 + 0.15 * Math.sin(i * 1.7)) });
-    levels.push({ side: "bid", price: Math.round(mid - (i + 1) * step), size: size * (1 + 0.15 * Math.cos(i * 1.3)) });
-  }
-  return { levels, mid, spreadBps };
-}
+import { cascadeSeries, ladderAt, controlRegions, liquidationBursts } from "../lib/sim";
 
 function ChartsSection() {
   const { data, isError } = useMacroCascade();
@@ -523,10 +464,11 @@ function ChartsSection() {
   const [live, setLive] = useState(true);
 
   useEffect(() => {
-    if (!live) return;
-    const id = window.setInterval(() => setStep((s) => (s + 1) % LIQUIDITY.length), 1200);
+    if (!live || !data) return;
+    const len = data.on.ticks.length;
+    const id = window.setInterval(() => setStep((s) => (s + 1) % len), 100);
     return () => window.clearInterval(id);
-  }, [live]);
+  }, [live, data]);
 
   const derived = useMemo(() => {
     if (!data) return null;
@@ -537,6 +479,8 @@ function ChartsSection() {
       regions: controlRegions(on),
       bursts: liquidationBursts(on),
       deviation: off.map((t) => ({ t: t.tick, bps: t.divergence_bps })),
+      cascadeOn: cascadeSeries(on),
+      laddersOn: on.map(ladderAt),
       liqOn: every(on, 60).map((t) => t.cum_liquidated_accounts),
       liqOff: every(off, 60).map((t) => t.cum_liquidated_accounts),
       depthOff: every(off, 60).map((t) => t.depth_pct_of_baseline),
@@ -544,7 +488,7 @@ function ChartsSection() {
   }, [data]);
 
   const tier1 = policy.data?.instrument_tiers.find((t) => t.tier === 1);
-  const book = ladder(LIQUIDITY[step] ?? 1);
+  const ladder = derived?.laddersOn[step] ?? null;
 
   return (
     <Section id="charts" title="Charts" description="Themed from the tokens, never Recharts' defaults. Every series is told apart by line weight, dash, fill or marker shape as well as by colour.">
@@ -576,13 +520,13 @@ function ChartsSection() {
             </CardBody>
           </Card>
           <Card>
-            <CardHeader actions={<Badge mono icon={<FlaskConical />}>fixture</Badge>}>
+            <CardHeader actions={<Badge mono icon={<Activity />}>live · controls on</Badge>}>
               <CardEyebrow>CascadeChart</CardEyebrow>
               <CardTitle>Liquidations per tick, by stage</CardTitle>
-              <CardDescription>Frames record accounts closed per tick but not which stage closed them; Phase 6 adds the split.</CardDescription>
+              <CardDescription>Live data with the stage split included.</CardDescription>
             </CardHeader>
             <CardBody>
-              <CascadeChart data={CASCADE} />
+              {derived ? <CascadeChart data={derived.cascadeOn} /> : <Skeleton className="h-56 w-full" />}
             </CardBody>
           </Card>
         </div>
@@ -592,7 +536,7 @@ function ChartsSection() {
             <CardHeader
               actions={
                 <>
-                  <Badge mono icon={<FlaskConical />}>fixture</Badge>
+                  <Badge mono icon={<Activity />}>live · controls on</Badge>
                   <Button size="sm" onClick={() => setLive((l) => !l)} aria-pressed={live}>
                     {live ? "Pause" : "Animate"}
                   </Button>
@@ -601,10 +545,10 @@ function ChartsSection() {
             >
               <CardEyebrow>DepthLadder</CardEyebrow>
               <CardTitle>Resting depth, thinning under stress</CardTitle>
-              <CardDescription>Steps through a liquidity collapse and recovery. Frames carry total depth, not levels; Phase 6 adds levels.</CardDescription>
+              <CardDescription>Live data with full depth levels included.</CardDescription>
             </CardHeader>
             <CardBody>
-              <DepthLadder levels={book.levels} mid={book.mid} spreadBps={book.spreadBps} depthOfBaseline={LIQUIDITY[step]} />
+              {ladder ? <DepthLadder levels={ladder.levels} mid={ladder.mid} spreadBps={ladder.spreadBps} depthOfBaseline={ladder.depthOfBaseline} /> : <Skeleton className="h-56 w-full" />}
             </CardBody>
           </Card>
           <Card>

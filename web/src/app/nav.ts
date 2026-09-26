@@ -26,7 +26,6 @@ export const NAV: NavSection[] = [
     path: "/simulator",
     label: "Simulator",
     icon: FlaskConical,
-    pending: { phase: 6, summary: "Run any scenario tick by tick with controls off and on, and watch the cascade form in the book, the mark and the liquidation queue." },
   },
   {
     path: "/war-room",

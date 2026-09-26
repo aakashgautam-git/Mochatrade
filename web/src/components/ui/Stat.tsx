@@ -26,6 +26,8 @@ interface StatProps {
   loading?: boolean;
   /** Count up from this on first render instead of appearing at the value. */
   startFrom?: number | undefined;
+  /** Duration of the count animation in ms. Defaults to 400. */
+  duration?: number | undefined;
 }
 
 /**
@@ -46,9 +48,13 @@ export function Stat({
   size = "md",
   loading = false,
   startFrom,
+  duration,
 }: StatProps) {
   const format = formatProp ?? integer;
-  const { value: shown, from } = useCountUp(value, startFrom === undefined ? {} : { startFrom });
+  const { value: shown, from } = useCountUp(value, {
+    ...(startFrom !== undefined && { startFrom }),
+    ...(duration !== undefined && { duration }),
+  });
 
   return (
     <div className="min-w-0">

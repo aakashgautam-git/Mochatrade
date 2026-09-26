@@ -24,6 +24,7 @@ interface DeviationChartProps {
   /** The Non-Reviewable Range, in basis points. From the active policy. */
   nrrBps: number;
   nrrLabel: string;
+  cursor?: number | undefined;
   height?: number;
 }
 
@@ -33,7 +34,7 @@ interface DeviationChartProps {
  * deviation large enough to be reviewed at all. The shaded bands make "outside"
  * visible without relying on the line's colour.
  */
-export function DeviationChart({ data, nrrBps, nrrLabel, height = 220 }: DeviationChartProps) {
+export function DeviationChart({ data, nrrBps, nrrLabel, cursor, height = 220 }: DeviationChartProps) {
   const theme = useChartTheme();
   const extreme = Math.max(nrrBps * 1.4, ...data.map((d) => Math.abs(d.bps)));
   const bound = Math.ceil(extreme / 100) * 100;
@@ -62,6 +63,9 @@ export function DeviationChart({ data, nrrBps, nrrLabel, height = 220 }: Deviati
             <ReferenceLine y={0} stroke={theme.line} />
             <ReferenceLine y={nrrBps} stroke={theme.neg} strokeDasharray="4 4" />
             <ReferenceLine y={-nrrBps} stroke={theme.neg} strokeDasharray="4 4" />
+            {cursor !== undefined ? (
+              <ReferenceLine x={cursor} stroke={theme.textDim} strokeDasharray="4 4" isFront />
+            ) : null}
             <XAxis
               dataKey="t"
               type="number"
