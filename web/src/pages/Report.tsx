@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FileText, Printer } from "lucide-react";
 
 import { Link } from "../app/router";
+import { ControlsBadge } from "../components/ControlsBadge";
 import { IncidentSelect, useIncidentSelection } from "../components/IncidentPicker";
 import { Badge, Button, EmptyState, Skeleton } from "../components/ui";
 import { fetchReport, parseMoney, rupees } from "../lib/api";
@@ -63,7 +64,7 @@ function Document({ r }: { r: IncidentReport }) {
     <article className="space-y-12 text-[15px] leading-relaxed">
       <header className="border-b border-line pb-8">
         <p className="text-xs font-medium uppercase tracking-[0.12em] text-text-dim">Incident report · {inc.severity === "SEV1" ? "SEV-1" : inc.severity}</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">{inc.code}</h1>
+        <h1 className="mt-2 flex items-center gap-3 text-3xl font-semibold tracking-tight">{inc.code} <ControlsBadge on={inc.controls_enabled} /></h1>
         <p className="mt-2 text-text-dim">
           {r.run.scenario_slug ?? "No run"} · declared {wall(inc.declared_at)} IST · policy {r.run.policy_version ?? "—"} · {inc.status.toLowerCase()}
         </p>

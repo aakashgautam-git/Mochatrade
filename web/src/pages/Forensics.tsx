@@ -3,6 +3,7 @@ import { CheckCircle2, CircleDashed, FileSearch, Gavel, ScanSearch, XCircle } fr
 import { useEffect, useMemo, useState } from "react";
 
 import { Link } from "../app/router";
+import { ControlsBadge } from "../components/ControlsBadge";
 import { useApp } from "../app/store";
 import { DepthLadder, DeviationChart, PriceChart } from "../components/charts";
 import {
@@ -78,17 +79,17 @@ export function Forensics() {
           onChange={(next) => setIncidentCode(next)}
           options={(incidents.data ?? []).map((i) => ({
             value: i.code,
-            label: `${i.code} · ${i.scenario_slug ?? "no run"} · ${i.status.toLowerCase()}`,
+            label: `${i.code} · ${i.scenario_slug ?? "no run"} · ${i.controls_enabled === false ? "controls OFF" : "controls ON"} · ${i.status.toLowerCase()}`,
           }))}
           className="min-w-[360px]"
         />
       </header>
-      <IncidentForensics key={code} code={code} />
+      <IncidentForensics key={code} code={code} controls={incidents.data?.find((i) => i.code === code)?.controls_enabled} />
     </div>
   );
 }
 
-function IncidentForensics({ code }: { code: string }) {
+function IncidentForensics({ code, controls }: { code: string; controls: boolean | null | undefined }) {
   const queryClient = useQueryClient();
   const classification = useQuery({ queryKey: ["classification", code], queryFn: () => fetchClassification(code) });
   const ticks = useQuery({ queryKey: ["forensic-ticks", code], queryFn: () => incidentTicks(code, 0) });
@@ -116,7 +117,7 @@ function IncidentForensics({ code }: { code: string }) {
 
   return (
     <div className="space-y-6">
-      <RunBar data={data} running={running} onRun={run} />
+      <RunBar data={data} running={running} onRun={run} controls={controls} />
       {data.verdict ? (
         <Classified data={data} verdict={data.verdict} ticks={tape} code={code} />
       ) : (
@@ -134,13 +135,14 @@ function IncidentForensics({ code }: { code: string }) {
   );
 }
 
-function RunBar({ data, running, onRun }: { data: ClassificationResponse; running: boolean; onRun: () => void }) {
+function RunBar({ data, running, onRun, controls }: { data: ClassificationResponse; running: boolean; onRun: () => void; controls: boolean | null | undefined }) {
   const v = data.verdict;
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3 text-sm text-text-dim">
           <Badge mono tone="neutral">{data.incident_code}</Badge>
+          <ControlsBadge on={controls} />
           <span className="num">Tape: {formatClock(data.current_tick)} recorded</span>
           <Badge tone={data.market_finished ? "pos" : "warn"}>{data.market_finished ? "Market event complete" : "Market still moving"}</Badge>
           {v ? (

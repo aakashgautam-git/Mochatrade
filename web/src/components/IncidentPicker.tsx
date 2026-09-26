@@ -25,7 +25,7 @@ export function IncidentSelect({ code, incidents, onChange }: { code: string; in
       onChange={onChange}
       options={incidents.map((i) => ({
         value: i.code,
-        label: `${i.code} · ${i.scenario_slug ?? "no run"} · ${i.status.toLowerCase()}`,
+        label: `${i.code} · ${i.scenario_slug ?? "no run"} · ${i.controls_enabled === false ? "controls OFF" : "controls ON"} · ${i.status.toLowerCase()}`,
       }))}
       className="min-w-[360px]"
     />

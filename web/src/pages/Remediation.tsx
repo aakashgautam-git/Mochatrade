@@ -3,6 +3,7 @@ import { Calculator, CheckCircle2, HandCoins, Landmark, RefreshCcw, Scale, ScanS
 import { useMemo, useState } from "react";
 
 import { Link } from "../app/router";
+import { ControlsBadge } from "../components/ControlsBadge";
 import { IncidentSelect, useIncidentSelection } from "../components/IncidentPicker";
 import {
   Badge,
@@ -23,6 +24,7 @@ import {
   ApiError,
   decideClaim,
   fetchActivePolicy,
+  fetchCompare,
   fetchClaims,
   incidentState,
   openClaims,
@@ -54,7 +56,7 @@ export function Remediation() {
       {loading ? (
         <Skeleton className="h-64" />
       ) : code ? (
-        <IncidentRemediation key={code} code={code} />
+        <IncidentRemediation key={code} code={code} controls={incidents.find((i) => i.code === code)?.controls_enabled} slug={incidents.find((i) => i.code === code)?.scenario_slug ?? null} />
       ) : (
         <EmptyState
           icon={<HandCoins />}
@@ -69,7 +71,7 @@ export function Remediation() {
   );
 }
 
-function IncidentRemediation({ code }: { code: string }) {
+function IncidentRemediation({ code, controls, slug }: { code: string; controls: boolean | null | undefined; slug: string | null }) {
   const queryClient = useQueryClient();
   const claims = useQuery({ queryKey: ["claims", code], queryFn: () => fetchClaims(code) });
   const state = useQuery({ queryKey: ["incident-state-lite", code], queryFn: () => incidentState(code) });
@@ -109,6 +111,7 @@ function IncidentRemediation({ code }: { code: string }) {
         <CardBody className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-dim">
             <Badge mono tone="neutral">{data.incident_code}</Badge>
+            <ControlsBadge on={controls} />
             {isRemedyClass(data.classification) ? (
               <Badge tone={CLASS_TONE[data.classification] === "neg" ? "neg" : "neutral"}>
                 Class {data.classification} · {CLASS_NAME[data.classification]}
@@ -135,6 +138,7 @@ function IncidentRemediation({ code }: { code: string }) {
         </CardBody>
       </Card>
 
+      {detail && controls === false && slug ? <Recommendation data={data} detail={detail} slug={slug} /> : null}
       {detail ? (
         <Opened data={data} detail={detail} code={code} onChanged={() => queryClient.invalidateQueries({ queryKey: ["claims", code] })} />
       ) : (
@@ -472,5 +476,30 @@ function Fact({ label, value }: { label: string; value: string }) {
       <dt className="text-xs text-text-dim">{label}</dt>
       <dd className="num mt-1 text-lg font-semibold text-text">{value}</dd>
     </div>
+  );
+}
+
+/** For a counterfactual (controls OFF) drill: what it is, who is owed, how much,
+ * and what the same shock did with the controls on. */
+function Recommendation({ data, detail, slug }: { data: ClaimsResponse; detail: RemediationDetail; slug: string }) {
+  const compare = useQuery({ queryKey: ["compare", slug], queryFn: () => fetchCompare(slug), staleTime: Infinity });
+  const w = detail.waterfall;
+  const owed = data.claims.filter((c) => c.evidence?.remedy?.kind === "cash").length;
+  const cls = isRemedyClass(data.classification) ? `Class ${data.classification} (${CLASS_NAME[data.classification]})` : "Unclassified";
+  const on = compare.data?.on.summary.accounts_liquidated;
+  const off = compare.data?.off.summary.accounts_liquidated;
+  return (
+    <Card>
+      <CardBody>
+        <p className="text-xs font-medium uppercase tracking-[0.12em] text-text-dim">Recommendation</p>
+        <p className="mt-2 text-sm leading-relaxed text-text">
+          {cls}. {owed} accounts are owed {inr(w.total_claims)}; we pay {inr(w.payable)} in cash
+          {w.pro_rata ? `, pro-rata at ${(w.ratio * 100).toFixed(1)}% above the ${inr(w.cap)} cap, with ${inr(w.shortfall)} as a non-cash make-good` : ", every claim in full"}.{" "}
+          {on !== undefined ? (
+            <span className="font-medium">With controls ON this incident would have had {on.toLocaleString("en-IN")} liquidations{off !== undefined ? `, not ${off.toLocaleString("en-IN")}` : ""}.</span>
+          ) : compare.isLoading ? "Loading the controls-on comparison…" : null}
+        </p>
+      </CardBody>
+    </Card>
   );
 }

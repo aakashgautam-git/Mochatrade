@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { useApp } from "../app/store";
 import { PriceChart } from "../components/charts";
+import { ControlsBadge } from "../components/ControlsBadge";
 import { PauseNote } from "../components/PauseNote";
 import {
   Badge,
@@ -35,6 +36,7 @@ import {
   Stat,
   TextField,
   Timeline,
+  Toggle,
   toast,
   type TimelineItem,
   type Tone,
@@ -90,6 +92,7 @@ function DeclarePanel({ onOpen }: { onOpen: (code: string) => void }) {
   const [ic, setIc] = useState("CEO");
   const [ops, setOps] = useState("CTO");
   const [comms, setComms] = useState("Support lead");
+  const [controlsOn, setControlsOn] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const declare = async () => {
@@ -97,7 +100,7 @@ function DeclarePanel({ onOpen }: { onOpen: (code: string) => void }) {
     try {
       const state = await declareIncident({
         scenario_slug: slug,
-        controls_enabled: true,
+        controls_enabled: controlsOn,
         incident_commander: ic,
         ops_lead: ops,
         comms_lead: comms,
@@ -139,6 +142,13 @@ function DeclarePanel({ onOpen }: { onOpen: (code: string) => void }) {
               options={(scenarios.data ?? []).map((s) => ({ value: s.slug, label: s.name }))}
               disabled={!scenarios.data}
             />
+            <Toggle
+              checked={controlsOn}
+              onChange={setControlsOn}
+              label={`Risk controls: ${controlsOn ? "ON" : "OFF"}`}
+              description={controlsOn ? "The published control stack runs: oracle-anchored mark, throttle, pauses, auctions." : "Counterfactual drill: same shock, no controls."}
+              readout
+            />
             <div className="grid gap-4 sm:grid-cols-3">
               <TextField label="IC" value={ic} onChange={setIc} hint={ROLE_BLURB.IC} />
               <TextField label="OPS" value={ops} onChange={setOps} hint={ROLE_BLURB.OPS} />
@@ -165,7 +175,7 @@ function DeclarePanel({ onOpen }: { onOpen: (code: string) => void }) {
                 {recent.data.slice(0, 6).map((inc) => (
                   <li key={inc.code} className="flex items-center justify-between gap-3 py-3">
                     <div className="min-w-0">
-                      <p className="num text-sm text-text">{inc.code}</p>
+                      <p className="num flex items-center gap-2 text-sm text-text">{inc.code} <ControlsBadge on={inc.controls_enabled} /></p>
                       <p className="truncate text-xs text-text-dim">{inc.scenario_slug ?? "—"} · {inc.status.toLowerCase()}</p>
                     </div>
                     <Button size="sm" onClick={() => onOpen(inc.code)}>Open</Button>
@@ -470,6 +480,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="neg" mono>{state.incident.code}</Badge>
+                <ControlsBadge on={state.incident.controls_enabled} />
                 <Badge mono>{state.scenario.instrument}</Badge>
                 <Badge>{state.scenario.ist_label}</Badge>
                 {resolved ? <Badge tone="pos" icon={<CircleCheck />}>Resolved</Badge> : null}

@@ -340,6 +340,8 @@ export interface IncidentAction {
 export interface Incident {
   code: string;
   scenario_slug: string | null;
+  /** The run's control stack: false is the counterfactual drill. */
+  controls_enabled: boolean | null;
   severity: string;
   status: string;
   declared_at: IsoDateTime;

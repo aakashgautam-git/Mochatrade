@@ -51,10 +51,12 @@ export function Stat({
   duration,
 }: StatProps) {
   const format = formatProp ?? integer;
-  const { value: shown, from } = useCountUp(value, {
+  const { value: counted, from } = useCountUp(value, {
     ...(startFrom !== undefined && { startFrom }),
     ...(duration !== undefined && { duration }),
   });
+  // Mid-count frames are floats; an integer stat must never show raw digits.
+  const shown = Number.isInteger(value) ? Math.round(counted) : counted;
 
   return (
     <div className="min-w-0">
@@ -67,14 +69,15 @@ export function Stat({
         </div>
       ) : (
         <div
+          title={format(value)}
           className={cn(
-            "num mt-3 grid font-semibold leading-none tracking-tight text-text",
+            "num mt-3 grid min-w-0 overflow-hidden whitespace-nowrap font-semibold leading-none tracking-tight text-text",
             size === "lg" ? "text-4xl" : "text-3xl",
           )}
         >
-          <span aria-hidden className="invisible col-start-1 row-start-1">{format(value)}</span>
-          <span aria-hidden className="invisible col-start-1 row-start-1">{format(from)}</span>
-          <span aria-hidden className="col-start-1 row-start-1">{format(shown)}</span>
+          <span aria-hidden className="invisible col-start-1 row-start-1 truncate">{format(value)}</span>
+          <span aria-hidden className="invisible col-start-1 row-start-1 truncate">{format(Number.isInteger(value) ? Math.round(from) : from)}</span>
+          <span aria-hidden className="col-start-1 row-start-1 truncate">{format(shown)}</span>
           <span className="sr-only">{format(value)}</span>
         </div>
       )}

@@ -287,7 +287,7 @@ export function Simulator() {
               <Stat label="ADL events" value={offTick.adl_accounts} duration={countDuration} delta={{ pct: (offTick.adl_accounts - onTick.adl_accounts) / Math.max(1, onTick.adl_accounts) * 100, goodWhen: "down" }} baseline={{ value: onTick.adl_accounts, label: "protected" }} />
             </div>
             <div className="rounded-card border border-line bg-surface p-4">
-              <Stat label="Depth of baseline" value={Math.round(offTick.depth_pct_of_baseline * 100)} duration={countDuration} delta={{ pct: Math.round(offTick.depth_pct_of_baseline * 100) - Math.round(onTick.depth_pct_of_baseline * 100), goodWhen: "up" }} baseline={{ value: Math.round(onTick.depth_pct_of_baseline * 100), label: "protected" }} format={(n) => `${n}%`} />
+              <Stat label="Depth of baseline" value={Math.round(offTick.depth_pct_of_baseline * 100)} duration={countDuration} delta={{ pct: Math.round(offTick.depth_pct_of_baseline * 100) - Math.round(onTick.depth_pct_of_baseline * 100), goodWhen: "up" }} baseline={{ value: Math.round(onTick.depth_pct_of_baseline * 100), label: "protected" }} format={(n) => `${Math.round(n)}%`} />
             </div>
           </div>
 
@@ -330,7 +330,7 @@ export function Simulator() {
               <Stat label="ADL events" value={onTick.adl_accounts} duration={countDuration} delta={{ pct: (onTick.adl_accounts - offTick.adl_accounts) / Math.max(1, offTick.adl_accounts) * 100, goodWhen: "down" }} baseline={{ value: offTick.adl_accounts, label: "unprotected" }} />
             </div>
             <div className="rounded-card border border-line bg-surface p-4">
-              <Stat label="Depth of baseline" value={Math.round(onTick.depth_pct_of_baseline * 100)} duration={countDuration} delta={{ pct: Math.round(onTick.depth_pct_of_baseline * 100) - Math.round(offTick.depth_pct_of_baseline * 100), goodWhen: "up" }} baseline={{ value: Math.round(offTick.depth_pct_of_baseline * 100), label: "unprotected" }} format={(n) => `${n}%`} />
+              <Stat label="Depth of baseline" value={Math.round(onTick.depth_pct_of_baseline * 100)} duration={countDuration} delta={{ pct: Math.round(onTick.depth_pct_of_baseline * 100) - Math.round(offTick.depth_pct_of_baseline * 100), goodWhen: "up" }} baseline={{ value: Math.round(offTick.depth_pct_of_baseline * 100), label: "unprotected" }} format={(n) => `${Math.round(n)}%`} />
             </div>
           </div>
 

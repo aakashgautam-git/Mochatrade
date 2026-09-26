@@ -320,6 +320,7 @@ class IncidentActionSerializer(serializers.ModelSerializer):
 
 class IncidentSerializer(serializers.ModelSerializer):
     scenario_slug = serializers.CharField(source="run.scenario.slug", read_only=True, default=None)
+    controls_enabled = serializers.BooleanField(source="run.controls_enabled", read_only=True, default=None)
     classification_display = serializers.CharField(
         source="get_classification_display", read_only=True
     )
@@ -330,7 +331,7 @@ class IncidentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Incident
         fields = (
-            "code", "scenario_slug", "severity", "status", "declared_at",
+            "code", "scenario_slug", "controls_enabled", "severity", "status", "declared_at",
             "resolved_at", "minutes_open", "incident_commander", "ops_lead",
             "comms_lead", "classification", "classification_display",
             "root_cause_layer", "owes_cash_remedy", "affected_accounts_count",
