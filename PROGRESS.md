@@ -31,3 +31,8 @@ Three lines per phase: done / deviations / issues.
 - Done: Report page (handover five, verdict and evidence, run summary, timeline, waterfall, comms with the one-hour check, class-matched precedents, India obligations with this incident's dates); Playbook page (the research's published procedure with live policy values); one shared research data module; the placeholder page is gone and every nav section is real; documents default to the light palette.
 - Deviations: precedents are placed per research 3 and 5 by class (C → OKX 2019 + NSE/Emkay, D → Robinhood + Oct 2025, G → JELLY + dYdX, and so on); the research's reopen gate thresholds are unnumbered ("spread < X bps, depth > Y%"), so the Playbook states the gates without inventing numbers. The report endpoint now returns aggregates instead of every claim twice.
 - Issues: none open.
+
+## Checkpoint: cloud handoff (26 Sep 2026)
+- Current phase: 12 (seed data + polish), next and not started; phases 0-11 done and committed (last: b776174). Tests at that commit: backend 377 passed / 2 skipped, web 34 passed, typecheck clean.
+- Half-done: nothing in code. A fresh database has no demo incident until Phase 12's seed, so Forensics, Remediation, Comms and Report start empty; the final pass (click-through, build, final docs) has not run.
+- Next: Phase 12 seed_demo command wired into make seed, then polish, then the final pass. Cloud setup steps are in HANDOFF.md.
