@@ -36,7 +36,6 @@ export const NAV: NavSection[] = [
     path: "/forensics",
     label: "Forensics",
     icon: ScanSearch,
-    pending: { phase: 8, summary: "The Abnormal Price Event test against the per-source evidence tape: deviation, reversion, counterfactual survival, then a root-cause class from A to G." },
   },
   {
     path: "/remediation",

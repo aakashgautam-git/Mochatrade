@@ -813,6 +813,15 @@ class Incident(models.Model):
     aggregate_exposure_inr = models.DecimalField(
         max_digits=20, decimal_places=2, default=Decimal("0")
     )
+    classification_detail = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "The classifier's working for the incident-level verdict: headline, "
+            "evidence and the tape signatures it read. The letter alone is not "
+            "a verdict anyone can check."
+        ),
+    )
     status = models.CharField(
         max_length=16, choices=IncidentStatus.choices, default=IncidentStatus.DECLARED
     )
@@ -920,6 +929,15 @@ class Claim(models.Model):
     decided_by = models.CharField(max_length=80, blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
     reason = models.TextField(blank=True)
+    evidence = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "The three APE criteria with their numbers, the decisive fill, and "
+            "the layer signals behind the category. What a user would need to "
+            "re-derive the decision from the published tape."
+        ),
+    )
 
     class Meta:
         ordering = ("incident", "-claimed_inr")

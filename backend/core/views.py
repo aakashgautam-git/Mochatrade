@@ -33,12 +33,15 @@ from .models import (
     IncidentAction,
     IncidentStatus,
     Instrument,
+    PriceObservation,
     RiskPolicy,
     Scenario,
 )
 from .serializers import (
     ActionRequestSerializer,
     ClaimDecisionSerializer,
+    ClassificationSerializer,
+    ClassifyRequestSerializer,
     ClockRequestSerializer,
     ClaimSerializer,
     CommsCreateSerializer,
@@ -573,12 +576,53 @@ class NotYetImplemented(APIView):
         )
 
 
-class IncidentClassifyView(NotYetImplemented):
-    phase, feature = 8, "The Abnormal Price Event classifier"
+def _classification_payload(incident: Incident, engine) -> dict[str, Any]:
+    detail = incident.classification_detail or None
+    claims = incident.claims.select_related("account").order_by("account__liquidated_at_tick", "account__handle")
+    return ClassificationSerializer({
+        "status": "classified" if detail else "unclassified",
+        "incident_code": incident.code,
+        "market_finished": engine.finished,
+        "current_tick": engine.tick,
+        "verdict": detail,
+        "claims": list(claims) if detail else [],
+    }).data
+
+
+class IncidentClassifyView(APIView):
+    """GET/POST /api/incidents/{code}/classify/ -- the published APE test.
+
+    POST runs it over everything the incident's engine has recorded so far and
+    writes one claim per force-closed account, each carrying its category and
+    the numbers behind it. Run mid-event it is marked provisional: fills in the
+    last 60 seconds cannot pass or fail the reversion test yet. GET returns the
+    last verdict without re-running anything.
+    """
+
+    def get(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            return Response(_classification_payload(incident, engine))
 
     def post(self, request: Request, code: str) -> Response:
-        _incident(code)
-        return self._501()
+        with runner.lock_for(code):
+            incident = _incident(code)
+            if incident.status == IncidentStatus.RESOLVED:
+                return _bad("This incident is resolved; its classification is part of the record.")
+            body = ClassifyRequestSerializer(data=request.data)
+            body.is_valid(raise_exception=True)
+            engine = runner.live_engine(incident)
+            if not engine.frames:
+                return _bad("Nothing to classify yet: the market has not started. Run the clock first.")
+            runner.classify_incident(
+                incident,
+                engine,
+                actor=body.validated_data["actor"] or incident.ops_lead or "OPS",
+                rationale=body.validated_data["rationale"],
+            )
+            incident.refresh_from_db()
+            return Response(_classification_payload(incident, engine))
 
 
 class IncidentClaimsView(NotYetImplemented):
@@ -625,39 +669,46 @@ class ClaimDecideView(APIView):
 
 
 class IncidentEvidenceView(APIView):
-    """GET /api/incidents/{code}/evidence/ -- the tape.
+    """GET /api/incidents/{code}/evidence/?from=N&to=M -- the tape.
 
-    Built from the persisted frames: our mark, the composite we published and
-    the reconstructed Reference Composite, per tick. Phase 8 adds one row per
-    individual oracle source.
+    One row per source per tick, straight from the persisted PriceObservation
+    rows: every oracle source as it printed and as the composite used it, with
+    the reason for every exclusion, then our mark, the composite we published
+    and the Reference Composite. Anyone holding this can recompute the APE test.
     """
 
     def get(self, request: Request, code: str) -> Response:
         with runner.lock_for(code):
             incident = _incident(code)
             engine = runner.live_engine(incident)
-            rows = []
-            for f in engine.frames:
-                f = f.as_dict()
-                rows.append({
-                    "tick": f["tick"], "source": "MOCHATRADE", "price": f["mark"],
-                    "is_stale": False, "weight": 1.0, "excluded_reason": "",
-                })
-                rows.append({
-                    "tick": f["tick"], "source": "COMPOSITE", "price": f["composite"],
-                    "is_stale": f["composite"] is None, "weight": 1.0,
-                    "excluded_reason": "" if f["composite"] else f["oracle_reason"],
-                })
-                rows.append({
-                    "tick": f["tick"], "source": "REFERENCE", "price": f["reference"],
-                    "is_stale": False, "weight": 1.0,
-                    "excluded_reason": "reconstructed after the fact; never used for marking",
-                })
+            try:
+                lo = int(request.query_params.get("from", 0))
+                hi = int(request.query_params.get("to", max(0, engine.tick - 1)))
+            except ValueError:
+                return _bad("'from' and 'to' must be tick numbers.")
+            if lo < 0 or hi < lo:
+                return _bad("'from' must be at least 0 and no greater than 'to'.")
+            rows = PriceObservation.objects.filter(run=incident.run, tick__gte=lo, tick__lte=hi).order_by("tick", "id")
             return Response(
                 {
                     "incident_code": code,
                     "ticks_recorded": len(engine.frames),
-                    "observations": PriceObservationSerializer(rows, many=True).data,
+                    "from_tick": lo,
+                    "to_tick": hi,
+                    "observations": PriceObservationSerializer(
+                        [
+                            {
+                                "tick": r.tick, "source": r.source,
+                                "source_display": r.get_source_display(), "rung": r.rung,
+                                "price": None if r.price is None else float(r.price),
+                                "raw_price": None if r.raw_price is None else float(r.raw_price),
+                                "is_stale": r.is_stale, "weight": r.weight, "used": r.used,
+                                "clamped": r.clamped, "excluded_reason": r.excluded_reason,
+                            }
+                            for r in rows
+                        ],
+                        many=True,
+                    ).data,
                 }
             )
 
@@ -709,9 +760,9 @@ class IncidentCommsView(APIView):
 class IncidentReportView(APIView):
     """GET /api/incidents/{code}/report/ -- the RCA payload.
 
-    Everything that exists is reported now. Classification and claims are
-    marked pending until Phases 8 and 9 compute them, rather than failing the
-    whole report because two sections are not built.
+    Everything that exists is reported now. Claims are marked pending until
+    Phase 9 computes them, rather than failing the whole report because one
+    section is not built.
     """
 
     def get(self, request: Request, code: str) -> Response:
@@ -733,7 +784,7 @@ class IncidentReportView(APIView):
                         incident.actions.order_by("tick", "id"), many=True
                     ).data,
                     "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
-                    "classification": {"status": "pending", "phase": 8},
+                    "classification": _classification_payload(incident, engine),
                     "claims": {"status": "pending", "phase": 9},
                 }
             )

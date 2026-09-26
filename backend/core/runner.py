@@ -36,6 +36,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
+from riskengine import classifier
 from riskengine.controls import ActionKind, ControlStack, OperatorAction
 from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
@@ -44,13 +45,18 @@ from riskengine.scenario import by_key
 from .models import (
     ENGINE_SOURCE,
     ActionType,
+    Claim,
+    ClaimStatus,
     DepthSnapshot,
+    IncidentAction,
+    IncidentStatus,
     LiquidationRecord,
     PriceObservation,
     PriceSource,
     RiskPolicy,
     RunStatus,
     Scenario,
+    SimAccount,
     SimRun,
 )
 
@@ -446,3 +452,116 @@ def money(value: Any) -> str:
         value = 0
     amount = value if isinstance(value, Decimal) else Decimal(repr(float(value)))
     return str(amount.quantize(PAISE, rounding=ROUND_HALF_UP))
+
+
+# --------------------------------------------------------------------------
+# Forensics: the published APE test, run against the incident's own tape
+# --------------------------------------------------------------------------
+
+DECIDED = {ClaimStatus.APPROVED, ClaimStatus.REJECTED, ClaimStatus.PAID}
+LIABLE = {"C", "D", "E", "G"}
+"""Categories where somebody other than the market owes the user: us (C, D, E)
+or the attacker, fronted by the Incident Reserve (G)."""
+
+
+def _inr(value: float) -> Decimal:
+    return Decimal(repr(float(value))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _px(value: float | None) -> Decimal:
+    return Decimal(repr(float(value or 0.0))).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+
+
+def classify_incident(incident, engine: Engine, *, actor: str, rationale: str):
+    """Run the APE test over everything this incident's engine has recorded and
+    write the verdict down: one SimAccount and one Claim per force-closed
+    account, each with its category and the working behind it; the incident's
+    class, layer and evidence; and a CLASSIFY entry in the action log.
+
+    Re-running on a longer tape refreshes every claim nobody has decided yet.
+    A claim a human approved, rejected or paid is never rewritten by a machine.
+    """
+    result = classifier.classify(
+        engine.scenario, engine.params, engine.frames, engine.events, engine.accounts,
+        finished=engine.finished,
+    )
+    run = incident.run
+    by_id = {a.id: a for a in engine.accounts}
+    tick = engine.tick if not engine.finished else drill_clock(incident, engine)
+    with transaction.atomic():
+        existing = {sa.handle: sa for sa in SimAccount.objects.filter(run=run)}
+        fresh: list[SimAccount] = []
+        for v in result.accounts:
+            a = by_id[v.account_id]
+            _, counterfactual = engine.valuation(a)
+            sa = existing.get(v.account_id) or SimAccount(run=run, handle=v.account_id)
+            sa.side = v.side
+            sa.notional_inr = _inr(v.entry_notional)
+            sa.leverage = v.leverage
+            sa.entry_price = _px(v.entry_price)
+            sa.collateral_inr = _inr(v.collateral)
+            sa.liquidated_at_tick = v.first_tick
+            sa.liquidation_price = _px(v.executed_price)
+            sa.realised_pnl_inr = _inr(a.realised_pnl)
+            sa.was_adl = v.category == "F"
+            sa.counterfactual_equity_inr = _inr(counterfactual)
+            if sa.pk is None:
+                fresh.append(sa)
+            else:
+                sa.save()
+        SimAccount.objects.bulk_create(fresh, batch_size=500)
+        accounts = {sa.handle: sa for sa in SimAccount.objects.filter(run=run)}
+
+        claims = {c.account.handle: c for c in incident.claims.select_related("account")}
+        new_claims: list[Claim] = []
+        for v in result.accounts:
+            a = by_id[v.account_id]
+            equity, counterfactual = engine.valuation(a)
+            claim = claims.get(v.account_id)
+            if claim is not None and claim.status in DECIDED:
+                continue
+            claim = claim or Claim(incident=incident, account=accounts[v.account_id])
+            claim.category = v.category
+            claim.executed_price = _px(v.executed_price)
+            claim.reference_composite_price = _px(v.reference_price)
+            claim.deviation_pct = round(v.deviation_bps / 100.0, 3)
+            claim.counterfactual_equity_inr = _inr(counterfactual)
+            claim.reason = v.reason
+            claim.evidence = {
+                **v.as_dict(),
+                "equity_inr": round(equity, 2),
+                "counterfactual_equity_inr": round(counterfactual, 2),
+            }
+            if claim.pk is None:
+                new_claims.append(claim)
+            else:
+                claim.save()
+        Claim.objects.bulk_create(new_claims, batch_size=500)
+
+        detail = result.as_dict()
+        detail.pop("accounts")
+        incident.classification = result.category
+        incident.root_cause_layer = result.layer.upper()
+        incident.affected_accounts_count = sum(result.counts[c] for c in LIABLE)
+        incident.classification_detail = detail
+        if incident.status in (IncidentStatus.DECLARED, IncidentStatus.CONTAINED):
+            incident.status = IncidentStatus.DIAGNOSED
+        incident.save(update_fields=[
+            "classification", "root_cause_layer", "affected_accounts_count",
+            "classification_detail", "status",
+        ])
+        IncidentAction.objects.create(
+            incident=incident,
+            tick=tick,
+            actor=actor,
+            action_type=ActionType.CLASSIFY,
+            params={
+                "category": result.category,
+                "counts": result.counts,
+                "provisional": result.provisional,
+                "at_tick": result.at_tick,
+            },
+            rationale=rationale or f"Class {result.category}. {result.headline}",
+            reversible=True,
+        )
+    return result

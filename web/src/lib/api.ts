@@ -2,6 +2,9 @@
 import type {
   ActionRequest,
   ActionResponse,
+  ClassificationResponse,
+  ClassifyRequest,
+  EvidenceResponse,
   Comparison,
   CompareResponse,
   CommsCreateRequest,
@@ -92,3 +95,10 @@ export const incidentAction = (code: string, body: ActionRequest) =>
   post<ActionResponse>(`/api/incidents/${code}/action/`, body);
 export const publishUpdate = (code: string, body: CommsCreateRequest) =>
   post<CommsUpdate>(`/api/incidents/${code}/comms/`, body);
+
+export const fetchClassification = (code: string) =>
+  get<ClassificationResponse>(`/api/incidents/${code}/classify/`);
+export const classifyIncident = (code: string, body: ClassifyRequest = {}) =>
+  post<ClassificationResponse>(`/api/incidents/${code}/classify/`, body);
+export const fetchEvidence = (code: string, from: number, to: number) =>
+  get<EvidenceResponse>(`/api/incidents/${code}/evidence/?from=${from}&to=${to}`);

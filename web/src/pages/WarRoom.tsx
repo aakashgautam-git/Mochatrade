@@ -40,6 +40,7 @@ import {
   type Tone,
 } from "../components/ui";
 import {
+  classifyIncident,
   advanceClock,
   ApiError,
   declareIncident,
@@ -336,10 +337,27 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
 
   const act = async (type: ActionType, params: Record<string, unknown> = {}) => {
     setConfirm(null);
+    const who = actor === "IC" ? state.incident.incident_commander || "IC" : actor === "OPS" ? state.incident.ops_lead || "OPS" : state.incident.comms_lead || "COMMS";
+    if (type === "CLASSIFY") {
+      // Diagnose runs the published APE test on the tape, not a free-text note.
+      try {
+        const r = await classifyIncident(code, { actor: who, rationale: rationale.trim() });
+        const v = r.verdict;
+        toast(v ? `Class ${v.category}: ${v.label}` : "Classified", {
+          tone: "pos",
+          description: v ? `${v.headline}${v.provisional ? " Provisional: the market is still moving." : ""} The working is on the Forensics page.` : "",
+        });
+        setRationale("");
+        await refresh();
+      } catch (e) {
+        toast("Refused", { tone: "neg", description: e instanceof ApiError ? e.message : String(e) });
+      }
+      return;
+    }
     try {
       const r = await incidentAction(code, {
         action_type: type,
-        actor: actor === "IC" ? state.incident.incident_commander || "IC" : actor === "OPS" ? state.incident.ops_lead || "OPS" : state.incident.comms_lead || "COMMS",
+        actor: who,
         rationale: rationale.trim() || DEFAULT_RATIONALE[type] || "",
         params,
       });
@@ -599,7 +617,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
 
             <ActionGroup title="Evidence and diagnosis">
               <Button icon={<Camera />} disabled={resolved} onClick={() => guarded("SNAPSHOT_EVIDENCE")}>Snapshot evidence</Button>
-              <Button icon={<Gavel />} disabled={resolved} onClick={() => guarded("CLASSIFY")}>Log classification</Button>
+              <Button icon={<Gavel />} disabled={resolved} onClick={() => guarded("CLASSIFY")}>Run the APE test</Button>
               <Button disabled={resolved} onClick={() => guarded("QUANTIFY")}>Log quantified</Button>
             </ActionGroup>
 

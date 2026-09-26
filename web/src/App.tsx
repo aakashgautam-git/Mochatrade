@@ -2,6 +2,7 @@ import { NAV } from "./app/nav";
 import { usePathname } from "./app/router";
 import { Shell } from "./app/Shell";
 import { useApp } from "./app/store";
+import { Forensics } from "./pages/Forensics";
 import { KitchenSink } from "./pages/KitchenSink";
 import { LegacyDemo } from "./pages/LegacyDemo";
 import { Placeholder } from "./pages/Placeholder";
@@ -48,6 +49,14 @@ export function App() {
     return (
       <Shell current={section} title="War Room" isDocument={false}>
         <WarRoom />
+      </Shell>
+    );
+  }
+
+  if (path === "/forensics") {
+    return (
+      <Shell current={section} title="Forensics" isDocument={false}>
+        <Forensics />
       </Shell>
     );
   }

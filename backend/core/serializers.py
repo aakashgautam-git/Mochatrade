@@ -411,31 +411,48 @@ class ClockRequestSerializer(serializers.Serializer):
 
 
 class PriceObservationSerializer(serializers.Serializer):
-    """The evidence tape, one row per source per tick."""
+    """The evidence tape, one row per source per tick: every oracle source as
+    it printed and as the composite used it, then our mark, the composite we
+    published and the Reference Composite. Derived rows carry no rung."""
 
     tick = serializers.IntegerField()
     source = serializers.CharField()
+    source_display = serializers.CharField()
+    rung = serializers.IntegerField(allow_null=True)
     price = serializers.FloatField(allow_null=True)
+    raw_price = serializers.FloatField(allow_null=True)
     is_stale = serializers.BooleanField()
     weight = serializers.FloatField()
+    used = serializers.BooleanField()
+    clamped = serializers.BooleanField()
     excluded_reason = serializers.CharField(allow_blank=True)
 
 
 class ClaimSerializer(serializers.ModelSerializer):
     account_handle = serializers.CharField(source="account.handle", read_only=True)
+    account_side = serializers.CharField(source="account.side", read_only=True)
+    account_leverage = serializers.FloatField(source="account.leverage", read_only=True)
+    liquidated_at_tick = serializers.IntegerField(source="account.liquidated_at_tick", read_only=True)
     claimed_inr_display = serializers.SerializerMethodField()
     approved_inr_display = serializers.SerializerMethodField()
     shortfall_inr_display = serializers.SerializerMethodField()
+    evidence = serializers.SerializerMethodField()
 
     class Meta:
         model = Claim
         fields = (
-            "id", "account_handle", "category", "status", "executed_price",
+            "id", "account_handle", "account_side", "account_leverage",
+            "liquidated_at_tick", "category", "status", "executed_price",
             "reference_composite_price", "deviation_pct",
             "counterfactual_equity_inr", "claimed_inr_display",
             "approved_inr_display", "provisional_credit_inr",
             "shortfall_inr_display", "decided_by", "decided_at", "reason",
+            "evidence",
         )
+
+    def get_evidence(self, obj: Claim) -> dict | None:
+        """The classifier's working, or null for a claim entered by hand."""
+        return obj.evidence or None
 
     def get_claimed_inr_display(self, obj: Claim) -> str:
         return money(obj.claimed_inr)
@@ -502,3 +519,61 @@ class PublicStatusUpdateSerializer(serializers.ModelSerializer):
             "incident_code", "severity", "sequence", "channel", "channel_display",
             "headline", "body", "published_at", "next_update_at",
         )
+
+
+class ClassifyRequestSerializer(serializers.Serializer):
+    actor = serializers.CharField(required=False, allow_blank=True, default="")
+    rationale = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class EpisodeSerializer(serializers.Serializer):
+    start_tick = serializers.IntegerField()
+    end_tick = serializers.IntegerField()
+    peak_bps = serializers.FloatField()
+    peak_tick = serializers.IntegerField()
+    sources = serializers.ListField(child=serializers.CharField())
+    direction = serializers.IntegerField()
+    fingerprint_start_tick = serializers.IntegerField(allow_null=True)
+    fingerprint_end_tick = serializers.IntegerField(allow_null=True)
+
+
+class VerdictSignalsSerializer(serializers.Serializer):
+    nrr_bps = serializers.FloatField()
+    mark_band_bps = serializers.FloatField()
+    reversion_frac = serializers.FloatField()
+    reversion_seconds = serializers.IntegerField()
+    composite_defect = EpisodeSerializer(allow_null=True)
+    push = EpisodeSerializer(allow_null=True)
+    closed_primary = serializers.ListField(child=serializers.CharField())
+    thin_book_wick = EpisodeSerializer(allow_null=True)
+    outage = serializers.DictField(allow_null=True)
+    upi_in_flight = serializers.IntegerField()
+    ltp_marked_liquidations = serializers.IntegerField()
+    accounts_force_closed = serializers.IntegerField()
+    ape_accounts = serializers.IntegerField()
+
+
+class VerdictSerializer(serializers.Serializer):
+    """The incident-level verdict, with the working that produced it."""
+
+    category = serializers.CharField()
+    label = serializers.CharField()
+    layer = serializers.CharField()
+    fault = serializers.CharField()
+    remedy = serializers.CharField()
+    headline = serializers.CharField()
+    evidence = serializers.ListField(child=serializers.CharField())
+    signals = VerdictSignalsSerializer()
+    provisional = serializers.BooleanField()
+    at_tick = serializers.IntegerField()
+    nrr_bps = serializers.FloatField()
+    counts = serializers.DictField(child=serializers.IntegerField())
+
+
+class ClassificationSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["classified", "unclassified"])
+    incident_code = serializers.CharField()
+    market_finished = serializers.BooleanField()
+    current_tick = serializers.IntegerField()
+    verdict = VerdictSerializer(allow_null=True)
+    claims = ClaimSerializer(many=True)

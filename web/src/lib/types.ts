@@ -453,17 +453,113 @@ export interface ActionResponse {
 export interface PriceObservation {
   tick: number;
   source: string;
+  source_display: string;
+  /** Null on the derived rows: our mark, the published composite, the Reference Composite. */
+  rung: number | null;
   price: number | null;
+  raw_price: number | null;
   is_stale: boolean;
   weight: number;
+  used: boolean;
+  clamped: boolean;
   excluded_reason: string;
 }
 
-/** GET /api/incidents/{code}/evidence/ */
+/** GET /api/incidents/{code}/evidence/?from=&to= */
 export interface EvidenceResponse {
   incident_code: string;
   ticks_recorded: number;
+  from_tick: number;
+  to_tick: number;
   observations: PriceObservation[];
+}
+
+export type RemedyClass = "A" | "B" | "C" | "D" | "E" | "F" | "G";
+
+export interface EpisodeSignal {
+  start_tick: number;
+  end_tick: number;
+  peak_bps: number;
+  peak_tick: number;
+  sources: string[];
+  direction: number;
+  fingerprint_start_tick: number | null;
+  fingerprint_end_tick: number | null;
+}
+
+export interface VerdictSignals {
+  nrr_bps: number;
+  mark_band_bps: number;
+  reversion_frac: number;
+  reversion_seconds: number;
+  composite_defect: EpisodeSignal | null;
+  push: EpisodeSignal | null;
+  closed_primary: string[];
+  thin_book_wick: EpisodeSignal | null;
+  outage: { start_tick: number; end_tick: number; affected_frac: number; label: string } | null;
+  upi_in_flight: number;
+  ltp_marked_liquidations: number;
+  accounts_force_closed: number;
+  ape_accounts: number;
+}
+
+/** The incident-level verdict and the working behind it. */
+export interface Verdict {
+  category: RemedyClass;
+  label: string;
+  layer: "venue" | "market" | "broker";
+  fault: string;
+  remedy: string;
+  headline: string;
+  evidence: string[];
+  signals: VerdictSignals;
+  provisional: boolean;
+  at_tick: number;
+  nrr_bps: number;
+  counts: Record<RemedyClass, number>;
+}
+
+export interface CriterionResult {
+  /** Null while the 60-second reversion window is still open. */
+  passed: boolean | null;
+  value: number | null;
+  threshold: number;
+  detail: string;
+}
+
+/** One account's APE test, exactly as the classifier ran it. */
+export interface AccountEvidence {
+  account_id: string;
+  category: RemedyClass;
+  reason: string;
+  side: "LONG" | "SHORT";
+  leverage: number;
+  entry_price: number;
+  collateral: number;
+  entry_notional: number;
+  first_tick: number;
+  tick: number;
+  stage: string;
+  executed_price: number;
+  reference_price: number;
+  mark: number;
+  mark_source: string;
+  composite: number | null;
+  book_mid: number;
+  deviation_bps: number;
+  deviation_basis: "fill" | "mark";
+  nrr_bps: number;
+  fills: number;
+  liquidated_notional: number;
+  fees: number;
+  closed: boolean;
+  ape: boolean;
+  pending: boolean;
+  criteria: { deviation: CriterionResult; reversion: CriterionResult; survival: CriterionResult };
+  outage: { start_tick: number; end_tick: number; inside: boolean } | null;
+  upi: { amount: number; initiated_tick: number; settles_tick: number | null; credit_advanced: number } | null;
+  equity_inr: number;
+  counterfactual_equity_inr: number;
 }
 
 export type ClaimStatus = "AUTO_APPROVED" | "PENDING" | "APPROVED" | "REJECTED" | "PAID";
@@ -471,6 +567,9 @@ export type ClaimStatus = "AUTO_APPROVED" | "PENDING" | "APPROVED" | "REJECTED" 
 export interface Claim {
   id: number;
   account_handle: string;
+  account_side: "LONG" | "SHORT";
+  account_leverage: number;
+  liquidated_at_tick: number | null;
   category: Classification;
   status: ClaimStatus;
   executed_price: DecimalString;
@@ -484,6 +583,23 @@ export interface Claim {
   decided_by: string;
   decided_at: IsoDateTime | null;
   reason: string;
+  /** The classifier's working; null for a claim entered by hand. */
+  evidence: AccountEvidence | null;
+}
+
+/** GET/POST /api/incidents/{code}/classify/ */
+export interface ClassificationResponse {
+  status: "classified" | "unclassified";
+  incident_code: string;
+  market_finished: boolean;
+  current_tick: number;
+  verdict: Verdict | null;
+  claims: Claim[];
+}
+
+export interface ClassifyRequest {
+  actor?: string;
+  rationale?: string;
 }
 
 export interface ClaimDecisionRequest {
@@ -533,7 +649,7 @@ export interface IncidentReport {
   };
   timeline: IncidentAction[];
   comms: CommsUpdate[];
-  classification: PendingSection;
+  classification: ClassificationResponse;
   claims: PendingSection;
 }
 

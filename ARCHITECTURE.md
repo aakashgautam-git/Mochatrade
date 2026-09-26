@@ -28,7 +28,17 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > paused" state; simulator replays never do. Every live-engine request holds a
 > per-incident lock.
 >
-> **NEXT: PHASE 8 — Forensics.**
+> **PHASE 8 — FORENSICS (complete).** The published APE test (deviation
+> beyond the tier NRR, 50% reversion inside 60 s, survival at the Reference
+> Composite) runs on the incident's own tape and classifies every
+> force-closed account A–G with its working. The incident verdict comes from
+> the tape signatures, never from the scenario's label; with controls on, all
+> six scenarios classify as designed. The Forensics page shows the verdict,
+> the signals behind it, the deviation charts, and per account the three
+> criteria, the persisted per-source oracle tape and the book at its decisive
+> fill. Classification rules: see `riskengine/classifier.py`.
+>
+> **NEXT: PHASE 9 — Remediation.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -53,9 +63,9 @@ trustworthy engine more than it needs a database.
 | 5 | Design system | Done |
 | 5.5 | Engine fix — velocity cooldown, reopening auction, Phase 6 data | Done |
 | 6 | Simulator surface | Done |
-| 7 | War room | **Done** |
-| 8 | Forensics | **Next** |
-| 9 | Remediation — claims, make-whole, pro-rata cap overflow | Not started |
+| 7 | War room | Done |
+| 8 | Forensics | **Done** |
+| 9 | Remediation — claims, make-whole, pro-rata cap overflow | **Next** |
 | 10 | Comms | Not started |
 | 11 | Incident report | Not started |
 | 12 | Seed data + polish | Not started |

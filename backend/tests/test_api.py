@@ -396,18 +396,25 @@ def test_unknown_incident_is_a_404(api, seeded) -> None:
 # --------------------------------------------------------------------------
 
 def test_evidence_tape_has_one_row_per_source_per_tick(api, seeded) -> None:
+    """Six oracle sources plus our mark, the published composite and the
+    Reference Composite: nine rows a tick, read from the persisted tape."""
     code = declare(api)
     post(api, f"/api/incidents/{code}/step/", {"ticks": 20})
     body = api.get(f"/api/incidents/{code}/evidence/").json()
     assert body["ticks_recorded"] == 20
-    assert len(body["observations"]) == 60
-    assert {o["source"] for o in body["observations"]} == {"MOCHATRADE", "COMPOSITE", "REFERENCE"}
+    assert len(body["observations"]) == 20 * 9
+    sources = {o["source"] for o in body["observations"]}
+    assert {"MOCHATRADE", "COMPOSITE", "REFERENCE", "BINANCE"} <= sources
+    oracle = [o for o in body["observations"] if o["rung"] is not None]
+    assert len(oracle) == 20 * 6 and all(o["excluded_reason"] or o["used"] for o in oracle)
+    window = api.get(f"/api/incidents/{code}/evidence/?from=5&to=6").json()
+    assert {o["tick"] for o in window["observations"]} == {5, 6}
+    assert api.get(f"/api/incidents/{code}/evidence/?from=9&to=3").status_code == 400
 
 
-def test_classify_and_claims_are_501_with_a_clear_detail(api, seeded) -> None:
+def test_claims_are_501_with_a_clear_detail(api, seeded) -> None:
     code = declare(api)
     for method, url, phase in (
-        (api.post, f"/api/incidents/{code}/classify/", 8),
         (api.get, f"/api/incidents/{code}/claims/", 9),
     ):
         r = method(url)
@@ -456,7 +463,8 @@ def test_report_returns_what_exists_and_marks_the_rest_pending(api, seeded) -> N
     assert body["incident"]["code"] == code
     assert body["run"]["current_tick"] == 30
     assert body["timeline"][0]["action_type"] == "DECLARE"
-    assert body["classification"] == {"status": "pending", "phase": 8}
+    assert body["classification"]["status"] == "unclassified"
+    assert body["classification"]["verdict"] is None
     assert body["claims"] == {"status": "pending", "phase": 9}
 
 
@@ -720,3 +728,64 @@ def test_live_engine_work_holds_the_incident_lock(api, seeded, monkeypatch) -> N
     post(api, f"/api/incidents/{code}/step/", {"ticks": 3})
     post(api, f"/api/incidents/{code}/action/", {"action_type": "PROTECT_SWITCH", "rationale": "x"})
     assert free_while_working and not any(free_while_working)
+
+
+
+# --------------------------------------------------------------------------
+# Phase 8: forensics
+# --------------------------------------------------------------------------
+
+def test_classify_needs_a_tape(api, seeded) -> None:
+    code = declare(api)
+    r = post(api, f"/api/incidents/{code}/classify/")
+    assert r.status_code == 400 and "has not started" in r.json()["detail"]
+    assert api.get(f"/api/incidents/{code}/classify/").json()["status"] == "unclassified"
+
+
+def test_classify_writes_a_verdict_and_one_claim_per_account(api, seeded) -> None:
+    """Our own oracle defect, controls off: the market marks on the last trade,
+    so the incident is ours and the accounts it liquidated say why."""
+    code = declare(api, slug="oracle_defect_hip3", controls=False)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 600})
+    r = post(api, f"/api/incidents/{code}/classify/", {"actor": "CTO", "rationale": "Ran the APE test."})
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["status"] == "classified" and body["market_finished"] is True
+    verdict = body["verdict"]
+    assert verdict["category"] == "C" and verdict["layer"] == "market"
+    assert verdict["provisional"] is False and verdict["evidence"]
+    assert verdict["signals"]["composite_defect"]["peak_bps"] < -verdict["nrr_bps"]
+    claims = body["claims"]
+    assert len(claims) == sum(verdict["counts"].values()) > 0
+    assert {c["category"] for c in claims} <= set("ABCDEFG")
+    for c in claims:
+        assert c["reason"]
+        assert set(c["evidence"]["criteria"]) == {"deviation", "reversion", "survival"}
+    ape = [c for c in claims if c["evidence"]["ape"]]
+    assert ape and not any(c["category"] == "A" for c in ape)
+
+    incident = Incident.objects.get(code=code)
+    assert incident.classification == "C" and incident.root_cause_layer == "MARKET"
+    assert incident.status == "DIAGNOSED"
+    assert incident.affected_accounts_count == verdict["counts"]["C"] + verdict["counts"]["D"] + verdict["counts"]["E"] + verdict["counts"]["G"]
+    logged = incident.actions.filter(action_type="CLASSIFY").get()
+    assert logged.params["category"] == "C" and logged.actor == "CTO"
+    assert SimAccount.objects.filter(run=incident.run).count() == len(claims)
+    report = api.get(f"/api/incidents/{code}/report/").json()
+    assert report["classification"]["verdict"]["category"] == "C"
+
+
+def test_a_mid_event_verdict_is_provisional_and_rerunning_spares_decided_claims(api, seeded) -> None:
+    code = declare(api, slug="macro_cascade", controls=False)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 240})
+    first = post(api, f"/api/incidents/{code}/classify/").json()
+    assert first["verdict"]["provisional"] is True
+    claim = Claim.objects.filter(incident__code=code).first()
+    post(api, f"/api/incidents/{code}/claims/{claim.id}/decide/", {"decision": "REJECTED", "reason": "IC call."})
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 480})
+    again = post(api, f"/api/incidents/{code}/classify/").json()
+    assert again["verdict"]["provisional"] is False
+    assert len(again["claims"]) >= len(first["claims"])
+    claim.refresh_from_db()
+    assert claim.status == "REJECTED" and claim.reason == "IC call."
+    assert Incident.objects.get(code=code).actions.filter(action_type="CLASSIFY").count() == 2

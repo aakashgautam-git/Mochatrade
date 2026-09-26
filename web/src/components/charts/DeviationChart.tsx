@@ -26,6 +26,8 @@ interface DeviationChartProps {
   nrrLabel: string;
   cursor?: number | undefined;
   height?: number;
+  /** What the line measures. Defaults to the mark against the Reference Composite. */
+  seriesLabel?: string;
 }
 
 /**
@@ -34,7 +36,7 @@ interface DeviationChartProps {
  * deviation large enough to be reviewed at all. The shaded bands make "outside"
  * visible without relying on the line's colour.
  */
-export function DeviationChart({ data, nrrBps, nrrLabel, cursor, height = 220 }: DeviationChartProps) {
+export function DeviationChart({ data, nrrBps, nrrLabel, cursor, height = 220, seriesLabel = "Mark − Reference Composite" }: DeviationChartProps) {
   const theme = useChartTheme();
   const extreme = Math.max(nrrBps * 1.4, ...data.map((d) => Math.abs(d.bps)));
   const bound = Math.ceil(extreme / 100) * 100;
@@ -45,7 +47,7 @@ export function DeviationChart({ data, nrrBps, nrrLabel, cursor, height = 220 }:
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <ChartLegend
           items={[
-            { label: "Mark − Reference Composite", color: theme.accent, mark: "thick" },
+            { label: seriesLabel, color: theme.accent, mark: "thick" },
             { label: nrrLabel, color: theme.neg, mark: "dashed" },
             { label: "Outside the range", color: theme.neg, mark: "area" },
           ]}

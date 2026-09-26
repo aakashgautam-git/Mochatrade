@@ -744,21 +744,32 @@ class Engine:
             self.step()
         return self.result()
 
-    def result(self) -> RunResult:
-        scenario = self.scenario
+    def _valuation_prices(self) -> tuple[float, float]:
         # Every run is valued at the SAME price -- the final Reference
         # Composite -- so two control stacks can be compared. Valuing each run
         # at its own final mark would mean a stack that merely moved the mark
         # looked like it moved the money, which is a measurement artifact and
         # not a result.
-        reference_final = scenario.initial_price
+        reference_final = self.scenario.initial_price
         if self.frames:
             last = self.frames[-1]
             reference_final = last.reference or last.mark
-
         reference_min = (
             self.min_reference if math.isfinite(self.min_reference) else reference_final
         )
+        return reference_final, reference_min
+
+    def valuation(self, account: Account) -> tuple[float, float]:
+        """(equity, counterfactual equity) for one account, on the same basis as
+        the run summary: both at the latest Reference Composite. The gap is what
+        a make-whole restores for this account and no more."""
+        reference_final, reference_min = self._valuation_prices()
+        equity = account.collateral + account.realised_pnl + account.unrealised(reference_final)
+        return equity, self._counterfactual_equity(account, reference_final, reference_min)
+
+    def result(self) -> RunResult:
+        scenario = self.scenario
+        reference_final, reference_min = self._valuation_prices()
         equity_end = math.fsum(
             a.collateral + a.realised_pnl + a.unrealised(reference_final)
             for a in self.accounts
