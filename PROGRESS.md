@@ -52,3 +52,8 @@ Three lines per phase: done / deviations / issues.
 - Deviations: the isolated-margin default skipped a random draw, so controls-on compared a different book; fixed (FRAME_SCHEMA 8). That exposed that the UPI credit's test only held on the shuffled book: it now measures the credit alone (264 → 110 in-flight liquidations); last in, the pauses already hold the cascade. Wiring the pre-trade price band into continuous trading was built and measured and backed out: alone it is the second most valuable control, but stacked on the throttle it holds closes past bankruptcy (protected macro 31 → 459 liquidations, 23 ADL, class A → B). It waits on a calibration decision; the band control is labelled "not wired" wherever it is measured.
 - Issues: see KNOWN_ISSUES (all remaining items need a number the research does not give, or a calibration decision).
 
+
+## Stopped on request (26 Sep 2026)
+- Done: review batch 1 (28dd758). REVIEW.md: 133 items; found BUILT 95 / PARTIAL 30 / MISSING 8, now 108 / 23 / 2.
+- Deviations: the PARTIAL batches were stopped on request. Batch 2a (auto-pager, evidence seal, quantify, reopen gate, recalibrate guard) is built and its own tests pass, but it has not had a full-suite run; it is parked unmerged on the local branch wip-batch-2a (829d69d).
+- Issues: see KNOWN_ISSUES.md. Push to main is refused (403).
