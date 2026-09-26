@@ -41,7 +41,8 @@ export const useApp = create<AppState>()(
     (set) => ({
       railCollapsed: false,
       toggleRail: () => set((s) => ({ railCollapsed: !s.railCollapsed })),
-      documentLight: false,
+      // Report and Playbook are documents: they open in the light palette.
+      documentLight: true,
       setDocumentLight: (on) => set({ documentLight: on }),
       previewDocumentTheme: false,
       setPreviewDocumentTheme: (on) => set({ previewDocumentTheme: on }),

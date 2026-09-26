@@ -10,6 +10,7 @@ A user mistake is never a 500.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -571,7 +572,7 @@ class IncidentTicksView(APIView):
             return Response({"from_tick": int(since), "ticks": TickSerializer(frames, many=True).data})
 
 
-def _classification_payload(incident: Incident, engine) -> dict[str, Any]:
+def _classification_payload(incident: Incident, engine, *, include_claims: bool = True) -> dict[str, Any]:
     detail = incident.classification_detail or None
     claims = incident.claims.select_related("account").order_by("account__liquidated_at_tick", "account__handle")
     return ClassificationSerializer({
@@ -580,7 +581,7 @@ def _classification_payload(incident: Incident, engine) -> dict[str, Any]:
         "market_finished": engine.finished,
         "current_tick": engine.tick,
         "verdict": detail,
-        "claims": list(claims) if detail else [],
+        "claims": list(claims) if detail and include_claims else [],
     }).data
 
 
@@ -620,7 +621,7 @@ class IncidentClassifyView(APIView):
             return Response(_classification_payload(incident, engine))
 
 
-def _claims_payload(incident: Incident, engine) -> dict[str, Any]:
+def _claims_payload(incident: Incident, engine, *, include_claims: bool = True) -> dict[str, Any]:
     detail = incident.remediation_detail or None
     claims = incident.claims.select_related("account").order_by("-claimed_inr", "account__handle")
     return ClaimsResponseSerializer({
@@ -630,8 +631,53 @@ def _claims_payload(incident: Incident, engine) -> dict[str, Any]:
         "market_finished": engine.finished,
         "current_tick": engine.tick,
         "remediation": detail,
-        "claims": list(claims),
+        "claims": list(claims) if include_claims else [],
     }).data
+
+
+def _claims_summary(incident: Incident) -> dict[str, Any]:
+    """The money in one place: what is owed, approved, credited and paid, and
+    what goes out as a non-cash make-good above the cap."""
+    cash = approved = provisional = make_good = Decimal("0")
+    owed = paid = pending = 0
+    for c in incident.claims.all():
+        remedy = (c.evidence or {}).get("remedy") or {}
+        if remedy.get("kind") == "cash":
+            owed += 1
+            cash += c.claimed_inr
+            make_good += Decimal(str(remedy.get("make_good_inr") or 0))
+        approved += c.approved_inr
+        provisional += c.provisional_credit_inr
+        paid += c.status == ClaimStatus.PAID
+        pending += c.status == ClaimStatus.PENDING
+    return {
+        "accounts_owed_cash": owed,
+        "claimed_inr": runner.money(cash),
+        "approved_inr": runner.money(approved),
+        "provisional_credit_inr": runner.money(provisional),
+        "make_good_inr": runner.money(make_good),
+        "paid": paid,
+        "pending": pending,
+    }
+
+
+def _obligations(incident: Incident) -> dict[str, Any]:
+    """SEBI's broker technical-glitch framework, adopted voluntarily (research 7):
+    notify within the hour, preliminary report at T+1, RCA within 14 days,
+    glitch data kept two years. Measured on the incident's own record."""
+    first = (
+        incident.actions.filter(action_type=ActionType.PUBLISH_UPDATE)
+        .order_by("tick", "id").first()
+    )
+    channels = sorted(set(incident.updates.filter(is_published=True).values_list("channel", flat=True)))
+    return {
+        "first_update_minutes": round(first.tick / 60.0, 1) if first else None,
+        "notified_within_hour": (first.tick <= 3600) if first else False,
+        "preliminary_due": (incident.declared_at + timedelta(days=comms.PRELIM_DAYS)).isoformat(),
+        "rca_due": (incident.declared_at + timedelta(days=comms.RCA_DAYS)).isoformat(),
+        "retain_until": (incident.declared_at + timedelta(days=730)).isoformat(),
+        "channels_used": channels,
+    }
 
 
 class IncidentClaimsView(APIView):
@@ -1019,8 +1065,11 @@ class IncidentReportView(APIView):
                         incident.actions.order_by("tick", "id"), many=True
                     ).data,
                     "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
-                    "classification": _classification_payload(incident, engine),
-                    "claims": _claims_payload(incident, engine),
+                    "classification": _classification_payload(incident, engine, include_claims=False),
+                    "claims": _claims_payload(incident, engine, include_claims=False),
+                    "claims_summary": _claims_summary(incident),
+                    "obligations": _obligations(incident),
+                    "controls": list(engine.controls.enabled),
                 }
             )
 

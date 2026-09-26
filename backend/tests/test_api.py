@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from django.core.management import call_command
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core import runner
@@ -965,3 +966,27 @@ def test_the_public_page_reads_the_live_system_in_plain_words(api, seeded) -> No
     after = api.get("/api/status/").json()
     assert after["overall"]["state"] == "operational"
     assert all(c["state"] == "operational" for c in after["components"])
+
+
+# --------------------------------------------------------------------------
+# Phase 11: the report
+# --------------------------------------------------------------------------
+
+def test_the_report_carries_the_money_and_the_regulatory_clock(api, seeded) -> None:
+    code = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 600})
+    before = api.get(f"/api/incidents/{code}/report/").json()
+    assert before["obligations"]["notified_within_hour"] is False
+    assert before["obligations"]["first_update_minutes"] is None
+    post(api, f"/api/incidents/{code}/comms/", {"headline": "Abnormal moves", "body": CLEAN})
+    post(api, f"/api/incidents/{code}/claims/")
+    body = api.get(f"/api/incidents/{code}/report/").json()
+    incident = Incident.objects.get(code=code)
+    assert body["obligations"]["notified_within_hour"] is True
+    assert body["obligations"]["rca_due"].startswith((incident.declared_at + timezone.timedelta(days=14)).date().isoformat())
+    assert body["obligations"]["channels_used"] == ["STATUS_PAGE"]
+    summary = body["claims_summary"]
+    assert summary["accounts_owed_cash"] > 0 and Decimal(summary["provisional_credit_inr"]) > 0
+    assert body["classification"]["claims"] == [] and body["claims"]["claims"] == []  # aggregates, not rows
+    assert body["classification"]["verdict"]["category"] == "D"
+    assert "oracle_anchored_mark" in body["controls"]

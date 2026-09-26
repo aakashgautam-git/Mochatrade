@@ -62,7 +62,18 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > in plain words from the live system, the incident timeline, published
 > public updates only.
 >
-> **NEXT: PHASE 11 — Report and Playbook.**
+> **PHASE 11 — REPORT AND PLAYBOOK (complete).** Both documents open in the
+> light palette. The Report is built from one incident's record: the T+60
+> handover in five lines, why this class, what the market did, the timeline,
+> the waterfall, what we said and when, the precedents the class answers to,
+> and the India obligations measured on this incident (SEBI-framework clock,
+> VDA tax, UPI, grievance channels, FIU-IND for G). The Playbook is the
+> published procedure with live policy values: the four reasons trades stand,
+> the APE test and NRR table, the remedy matrix, the waterfall and cap, roles,
+> the 60-minute clock, the judgment calls, the don'ts, the India layer, and the
+> seven-precedent case file with the OKX and CFTC/FIA templates.
+>
+> **NEXT: PHASE 12 — Seed data and polish.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -90,9 +101,9 @@ trustworthy engine more than it needs a database.
 | 7 | War room | Done |
 | 8 | Forensics | Done |
 | 9 | Remediation — claims, make-whole, pro-rata cap overflow | Done |
-| 10 | Comms | **Done** |
-| 11 | Incident report | **Next** |
-| 12 | Seed data + polish | Not started |
+| 10 | Comms | Done |
+| 11 | Incident report | **Done** |
+| 12 | Seed data + polish | **Next** |
 
 Every phase updates this marker and ends in a commit. Do not start the next
 phase without being asked.

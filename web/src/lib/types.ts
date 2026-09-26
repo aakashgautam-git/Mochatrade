@@ -810,6 +810,26 @@ export interface IncidentReport {
   comms: CommsUpdate[];
   classification: ClassificationResponse;
   claims: ClaimsResponse;
+  claims_summary: {
+    accounts_owed_cash: number;
+    claimed_inr: MoneyString;
+    approved_inr: MoneyString;
+    provisional_credit_inr: MoneyString;
+    make_good_inr: MoneyString;
+    paid: number;
+    pending: number;
+  };
+  /** SEBI's technical-glitch framework, adopted voluntarily, measured on this incident. */
+  obligations: {
+    first_update_minutes: number | null;
+    notified_within_hour: boolean;
+    preliminary_due: IsoDateTime;
+    rca_due: IsoDateTime;
+    retain_until: IsoDateTime;
+    channels_used: Channel[];
+  };
+  /** The control stack the incident's run used. */
+  controls: string[];
 }
 
 /** 501 from a route whose phase has not landed. */

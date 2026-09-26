@@ -5,9 +5,10 @@ import { useApp } from "./app/store";
 import { Comms } from "./pages/Comms";
 import { Forensics } from "./pages/Forensics";
 import { KitchenSink } from "./pages/KitchenSink";
+import { Playbook } from "./pages/Playbook";
 import { LegacyDemo } from "./pages/LegacyDemo";
-import { Placeholder } from "./pages/Placeholder";
 import { Remediation } from "./pages/Remediation";
+import { Report } from "./pages/Report";
 import { Simulator } from "./pages/Simulator";
 import { StatusPage } from "./pages/StatusPage";
 import { WarRoom } from "./pages/WarRoom";
@@ -81,10 +82,18 @@ export function App() {
     );
   }
 
-  if (section) {
+  if (path === "/report") {
     return (
-      <Shell current={section} title={section.label} isDocument={section.document === true}>
-        <Placeholder section={section} />
+      <Shell current={section} title="Incident report" isDocument>
+        <Report />
+      </Shell>
+    );
+  }
+
+  if (path === "/playbook") {
+    return (
+      <Shell current={section} title="Playbook" isDocument>
+        <Playbook />
       </Shell>
     );
   }

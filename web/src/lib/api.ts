@@ -8,6 +8,7 @@ import type {
   Recalibration,
   ClassificationResponse,
   ClassifyRequest,
+  IncidentReport,
   CommsCheckRequest,
   CommsCheckResponse,
   CommsTemplate,
@@ -127,3 +128,4 @@ export const decideComms = (code: string, id: number, body: { decision: "APPROVE
 export const publishComms = (code: string, id: number, publisher = "") =>
   post<CommsUpdate>(`/api/incidents/${code}/comms/${id}/publish/`, { publisher });
 export const fetchPublicStatus = () => get<PublicStatusResponse>("/api/status/");
+export const fetchReport = (code: string) => get<IncidentReport>(`/api/incidents/${code}/report/`);
