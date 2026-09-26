@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
 from dataclasses import asdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -845,3 +845,64 @@ def recalibrate_reserve(*, actor: str) -> dict[str, Any]:
             "so recalibrating again gives the same target and writes nothing: the loop closed in one step."
         ),
     }
+
+
+# --------------------------------------------------------------------------
+# Comms: the facts every template and guardrail reads
+# --------------------------------------------------------------------------
+
+def _controls_on(incident, engine: Engine) -> str:
+    """What we turned on, in words a user reads: operator switches from the
+    log, automatic protections from the engine's live state."""
+    done = set(incident.actions.values_list("action_type", flat=True))
+    parts: list[str] = []
+    if ActionType.PROTECT_SWITCH in done:
+        parts.append("reduce-only, a liquidation throttle and a 3x leverage cap")
+    else:
+        if ActionType.REDUCE_ONLY in done:
+            parts.append("reduce-only")
+        if ActionType.LIQ_THROTTLE in done:
+            parts.append("a liquidation throttle")
+        if ActionType.LEVERAGE_CAP in done:
+            parts.append("a 3x leverage cap")
+    snap = engine.frames[-1] if engine.frames else None
+    if (snap and snap.liquidations_paused) or ActionType.PAUSE_LIQUIDATIONS in done:
+        parts.append("liquidations paused on this market while prices are verified")
+    if snap and snap.trading_paused:
+        parts.append("a trading pause that reopens through a short auction")
+    if parts:
+        return ", ".join(parts)
+    return "our automatic volatility controls" if engine.controls.enabled else "nothing yet; the Protect Switch is next"
+
+
+def comms_facts(incident, engine: Engine):
+    from . import comms
+
+    detail = incident.classification_detail or {}
+    plan = (incident.remediation_detail or {}).get("waterfall") or {}
+    window = incident.claims.filter(category__in=sorted(LIABLE)).select_related("account")
+    ticks = [c.account.liquidated_at_tick for c in window if c.account.liquidated_at_tick is not None]
+    deadline = (incident.remediation_detail or {}).get("provisional_deadline")
+    return comms.Facts(
+        code=incident.code,
+        instrument=engine.scenario.instrument,
+        scenario=engine.scenario.title,
+        classified=bool(detail),
+        category=incident.classification if detail else "",
+        affected=incident.affected_accounts_count,
+        claims_open=bool(plan),
+        total_claims=float(plan.get("total_claims") or 0.0),
+        payable=float(plan.get("payable") or 0.0),
+        shortfall=float(plan.get("shortfall") or 0.0),
+        pro_rata=bool(plan.get("pro_rata")),
+        ratio=float(plan.get("ratio") or 1.0),
+        cap=engine.params.per_incident_cap_inr,
+        names=tuple(n for n in (incident.incident_commander, incident.comms_lead) if n),
+        declared_at=incident.declared_at,
+        drill_seconds=drill_clock(incident, engine),
+        event_from_tick=min(ticks) if ticks else None,
+        event_to_tick=max(ticks) if ticks else None,
+        controls=_controls_on(incident, engine),
+        provisional_deadline=datetime.fromisoformat(deadline) if deadline else None,
+        solvency_note="",
+    )

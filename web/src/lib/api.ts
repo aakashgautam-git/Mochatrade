@@ -8,6 +8,10 @@ import type {
   Recalibration,
   ClassificationResponse,
   ClassifyRequest,
+  CommsCheckRequest,
+  CommsCheckResponse,
+  CommsTemplate,
+  PublicStatusResponse,
   EvidenceResponse,
   Comparison,
   CompareResponse,
@@ -113,3 +117,13 @@ export const openClaims = (code: string, body: { actor?: string; rationale?: str
 export const decideClaim = (code: string, id: number, body: ClaimDecisionRequest) =>
   post<Claim>(`/api/incidents/${code}/claims/${id}/decide/`, body);
 export const recalibrateReserve = (actor = "Risk") => post<Recalibration>("/api/policies/recalibrate/", { actor });
+
+export const fetchComms = (code: string) => get<CommsUpdate[]>(`/api/incidents/${code}/comms/`);
+export const createComms = (code: string, body: CommsCreateRequest) => post<CommsUpdate>(`/api/incidents/${code}/comms/`, body);
+export const checkComms = (code: string, body: CommsCheckRequest) => post<CommsCheckResponse>(`/api/incidents/${code}/comms/check/`, body);
+export const fetchTemplates = (code: string) => get<CommsTemplate[]>(`/api/incidents/${code}/comms/templates/`);
+export const decideComms = (code: string, id: number, body: { decision: "APPROVE" | "REJECT"; approver?: string; note?: string }) =>
+  post<CommsUpdate>(`/api/incidents/${code}/comms/${id}/approve/`, body);
+export const publishComms = (code: string, id: number, publisher = "") =>
+  post<CommsUpdate>(`/api/incidents/${code}/comms/${id}/publish/`, { publisher });
+export const fetchPublicStatus = () => get<PublicStatusResponse>("/api/status/");

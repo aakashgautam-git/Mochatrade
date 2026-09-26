@@ -700,6 +700,18 @@ export interface ClaimDecisionRequest {
 
 export type Channel = "STATUS_PAGE" | "X" | "WHATSAPP" | "TELEGRAM" | "EMAIL";
 
+export type Audience = "PUBLIC" | "AFFECTED" | "VENUE" | "REGULATOR";
+export type Approval = "DRAFT" | "PENDING" | "APPROVED" | "REJECTED";
+
+/** One guardrail finding. A block stops approval and publishing. */
+export interface Finding {
+  rule: string;
+  severity: "block" | "warn";
+  message: string;
+  source: string;
+  match: string | null;
+}
+
 export interface CommsUpdate {
   id: number;
   sequence: number;
@@ -710,6 +722,17 @@ export interface CommsUpdate {
   published_at: IsoDateTime | null;
   next_update_at: IsoDateTime | null;
   is_published: boolean;
+  audience: Audience;
+  audience_display: string;
+  template: string;
+  approval: Approval;
+  approval_display: string;
+  drafted_by: string;
+  approved_by: string;
+  approved_at: IsoDateTime | null;
+  approval_note: string;
+  guardrails: Finding[];
+  solvency_verified: boolean;
 }
 
 export interface CommsCreateRequest {
@@ -719,6 +742,53 @@ export interface CommsCreateRequest {
   sequence?: number;
   next_update_at?: IsoDateTime | null;
   is_published?: boolean;
+  audience?: Audience;
+  template?: string;
+  drafted_by?: string;
+  solvency_verified?: boolean;
+  submit?: boolean;
+}
+
+export interface CommsCheckRequest {
+  headline: string;
+  body: string;
+  channel: Channel;
+  audience: Audience;
+  template?: string;
+  solvency_verified?: boolean;
+}
+
+/** POST /api/incidents/{code}/comms/check/ */
+export interface CommsCheckResponse {
+  findings: Finding[];
+  blocked: boolean;
+  facts: {
+    classified: boolean;
+    category: string;
+    affected: number;
+    claims_open: boolean;
+    pro_rata: boolean;
+    ratio: number;
+    next_update: string;
+  };
+}
+
+export interface TemplateDraft {
+  channel: Channel;
+  headline: string;
+  body: string;
+  findings: Finding[];
+}
+
+/** GET /api/incidents/{code}/comms/templates/ */
+export interface CommsTemplate {
+  key: string;
+  audience: Audience;
+  audience_display: string;
+  channels: Channel[];
+  title: string;
+  when: string;
+  drafts: TemplateDraft[];
 }
 
 export interface PendingSection {
@@ -769,9 +839,32 @@ export interface PublicStatusUpdate {
   next_update_at: IsoDateTime | null;
 }
 
+export type ComponentState = "operational" | "degraded" | "partial_outage" | "major_outage";
+
+export interface PublicComponent {
+  name: string;
+  state: ComponentState;
+  state_label: string;
+  note: string;
+}
+
+export interface PublicIncident {
+  code: string;
+  title: string;
+  severity: string;
+  started_at: IsoDateTime;
+  resolved_at: IsoDateTime | null;
+  state: "investigating" | "identified" | "monitoring" | "resolved";
+  updates: PublicStatusUpdate[];
+}
+
 /** GET /api/status/ */
 export interface PublicStatusResponse {
+  overall: { state: ComponentState; headline: string };
+  components: PublicComponent[];
+  incidents: PublicIncident[];
   updates: PublicStatusUpdate[];
+  as_of: IsoDateTime;
 }
 
 // ---------------------------------------------------------------------------

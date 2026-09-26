@@ -45,6 +45,7 @@ import {
   ApiError,
   declareIncident,
   fetchScenarios,
+  fetchTemplates,
   incidentAction,
   incidentState,
   incidentTicks,
@@ -219,6 +220,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [headline, setHeadline] = useState("");
   const [body, setBody] = useState("");
+  const [templateKey, setTemplateKey] = useState("");
   const stateRef = useRef<IncidentState | null>(null);
   stateRef.current = state;
 
@@ -333,7 +335,9 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
     steps.find((s) => s.state === "overdue") ??
     steps.find((s) => s.state === "due") ??
     steps.find((s) => s.state === "upcoming");
-  const updates = state.actions.filter((a) => a.action_type === "PUBLISH_UPDATE").length;
+  const updates = state.actions.filter(
+    (a) => a.action_type === "PUBLISH_UPDATE" && (a.params["audience"] ?? "PUBLIC") === "PUBLIC",
+  ).length;
 
   const act = async (type: ActionType, params: Record<string, unknown> = {}) => {
     setConfirm(null);
@@ -406,34 +410,19 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
     void act(type);
   };
 
-  const draftUpdate = () => {
-    const n = updates + 1;
-    const since = istAt(state.incident.declared_at, 0);
-    const next = istAt(state.incident.declared_at, clock + 600);
-    const contained = state.actions.some((a) => a.action_type === "PROTECT_SWITCH");
-    const turnedOn = contained
-      ? "reduce-only, a liquidation throttle and a 3x leverage cap"
-      : "our automatic volatility controls";
-    const cls = state.incident.classification;
-    if (n === 1) {
-      setHeadline(`Abnormal price moves on ${state.scenario.instrument}`);
-      setBody(`We are seeing abnormal price moves on ${state.scenario.instrument} since ${since} IST. What we have turned on: ${turnedOn}. We have not confirmed a cause and we will not guess. Next update at ${next} IST.`);
-    } else if (n === 2) {
-      const ours = cls === "C" || cls === "D" || cls === "E";
-      setHeadline(ours ? "Preliminary finding: the fault is ours" : `Update on ${state.scenario.instrument}`);
-      setBody(
-        ours
-          ? `Our preliminary finding is that this was a fault on our side (class ${cls} under our published Abnormal Price Event policy). Affected users will be made whole under that policy. Trades stand; people get made whole. Next update at ${next} IST with the number.`
-          : `We are still diagnosing across our market, our app and the venue. What we have turned on: ${turnedOn}. Next update at ${next} IST.`,
-      );
-    } else {
-      const n3 = state.incident.affected_accounts_count;
-      setHeadline(n3 ? `${n3} users affected` : `Update on ${state.scenario.instrument}`);
-      setBody(
-        n3
-          ? `${n3} users are affected, ${state.incident.aggregate_exposure_inr_display} in aggregate, between ${since} and ${istAt(state.incident.declared_at, state.total_ticks)} IST. Compensation follows our published Abnormal Price Event policy. Next update at ${next} IST.`
-          : `We are computing the affected set and will publish the number once it is computed — not an estimate. Next update at ${next} IST.`,
-      );
+  const draftUpdate = async () => {
+    // The Comms page's templates, filled server-side from this incident's
+    // record: one rulebook for the room and the comms desk.
+    const key = updates === 0 ? "first-word" : updates === 1 ? "preliminary" : updates === 2 ? "the-number" : clock >= 45 * 60 ? "handover" : "reopen";
+    try {
+      const templates = await fetchTemplates(code);
+      const draft = templates.find((t) => t.key === key)?.drafts.find((d) => d.channel === "STATUS_PAGE");
+      if (!draft) return;
+      setTemplateKey(key);
+      setHeadline(draft.headline);
+      setBody(draft.body);
+    } catch (e) {
+      toast("No draft", { tone: "neg", description: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -443,10 +432,11 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
       return;
     }
     try {
-      await publishUpdate(code, { channel: "STATUS_PAGE", headline, body, is_published: true });
+      await publishUpdate(code, { channel: "STATUS_PAGE", headline, body, is_published: true, template: templateKey });
       toast(`Update ${updates + 1} published`, { tone: "pos", description: "Status page. Full channel templates and guardrails are on the Comms page." });
       setHeadline("");
       setBody("");
+      setTemplateKey("");
       await refresh();
     } catch (e) {
       toast("Not published", { tone: "neg", description: e instanceof Error ? e.message : String(e) });
@@ -631,7 +621,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
             <div className="space-y-3 border-t border-line pt-6">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-medium uppercase tracking-[0.12em] text-text-dim">Public update {updates + 1}</p>
-                <Button size="sm" icon={<Megaphone />} onClick={draftUpdate} disabled={resolved}>Draft from the playbook</Button>
+                <Button size="sm" icon={<Megaphone />} onClick={() => void draftUpdate()} disabled={resolved}>Draft from the playbook</Button>
               </div>
               <TextField label="Headline" value={headline} onChange={setHeadline} />
               <TextField label="Body" value={body} onChange={setBody} multiline rows={4} hint="No cause, no blame, a committed next-update time. Guardrails and every channel are on the Comms page." />

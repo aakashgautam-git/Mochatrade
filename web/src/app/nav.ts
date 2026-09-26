@@ -46,7 +46,6 @@ export const NAV: NavSection[] = [
     path: "/comms",
     label: "Comms",
     icon: Megaphone,
-    pending: { phase: 10, summary: "Status page, X and WhatsApp updates on a committed cadence. What we see, what we turned on, and when the next update lands." },
   },
   {
     path: "/report",

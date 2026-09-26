@@ -50,7 +50,19 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > is never touched and stays below the macro cascade's uncontrolled exposure,
 > so the pro-rata path is live in the demo.
 >
-> **NEXT: PHASE 10 — Comms.**
+> **PHASE 10 — COMMS AND THE PUBLIC STATUS PAGE (complete).** Nine templates
+> across four audiences (everyone; affected users; the venue; regulators:
+> the voluntary SEBI glitch notice and an FIU-IND report), filled server-side
+> from the incident's own record. Language guardrails from research 5, 6 and
+> 9 block banned phrases ("market conditions", "your funds are safe" before
+> solvency is attested, a number before it is computed, arguing, blame, a
+> promised rollback, full payment when the cap binds, no next-update time)
+> and warn on risky wording. COMMS drafts, the IC approves (guardrails re-run
+> at approval), COMMS publishes. `/status` is the public page: six components
+> in plain words from the live system, the incident timeline, published
+> public updates only.
+>
+> **NEXT: PHASE 11 — Report and Playbook.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -77,9 +89,9 @@ trustworthy engine more than it needs a database.
 | 6 | Simulator surface | Done |
 | 7 | War room | Done |
 | 8 | Forensics | Done |
-| 9 | Remediation — claims, make-whole, pro-rata cap overflow | **Done** |
-| 10 | Comms | **Next** |
-| 11 | Incident report | Not started |
+| 9 | Remediation — claims, make-whole, pro-rata cap overflow | Done |
+| 10 | Comms | **Done** |
+| 11 | Incident report | **Next** |
 | 12 | Seed data + polish | Not started |
 
 Every phase updates this marker and ends in a commit. Do not start the next

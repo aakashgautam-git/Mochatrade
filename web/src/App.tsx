@@ -2,12 +2,14 @@ import { NAV } from "./app/nav";
 import { usePathname } from "./app/router";
 import { Shell } from "./app/Shell";
 import { useApp } from "./app/store";
+import { Comms } from "./pages/Comms";
 import { Forensics } from "./pages/Forensics";
 import { KitchenSink } from "./pages/KitchenSink";
 import { LegacyDemo } from "./pages/LegacyDemo";
 import { Placeholder } from "./pages/Placeholder";
 import { Remediation } from "./pages/Remediation";
 import { Simulator } from "./pages/Simulator";
+import { StatusPage } from "./pages/StatusPage";
 import { WarRoom } from "./pages/WarRoom";
 
 /**
@@ -19,6 +21,7 @@ export function App() {
   const preview = useApp((s) => s.previewDocumentTheme);
 
   if (path === "/demo") return <LegacyDemo />;
+  if (path === "/status") return <StatusPage />;
 
   const section = NAV.find((s) => s.path === path);
 
@@ -66,6 +69,14 @@ export function App() {
     return (
       <Shell current={section} title="Remediation" isDocument={false}>
         <Remediation />
+      </Shell>
+    );
+  }
+
+  if (path === "/comms") {
+    return (
+      <Shell current={section} title="Comms" isDocument={false}>
+        <Comms />
       </Shell>
     );
   }

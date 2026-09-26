@@ -476,7 +476,7 @@ def test_public_status_leaks_no_internal_fields(api, seeded) -> None:
     incident.aggregate_exposure_inr = Decimal("9130000")
     incident.save()
     post(api, f"/api/incidents/{code}/comms/", {
-        "channel": "X", "headline": "Public", "body": "Visible.",
+        "channel": "X", "headline": "Public", "body": "Visible. Next update at 04:25 IST.",
     })
     CommsUpdate.objects.create(
         incident=incident, sequence=2, channel="X", headline="DRAFT-SECRET",
@@ -882,3 +882,86 @@ def test_recalibrate_from_simulation_resolves_the_circularity_in_one_step(api, s
     assert again.status_code == 200
     assert again.json()["converged"] is True and again.json()["new_version"] is None
     assert RiskPolicy.objects.count() == 2
+
+
+
+# --------------------------------------------------------------------------
+# Phase 10: comms and the public status page
+# --------------------------------------------------------------------------
+
+CLEAN = "We see abnormal moves. What we turned on: reduce-only. Next update at 04:25 IST. CEO"
+
+
+def test_draft_submit_approve_publish(api, seeded) -> None:
+    code = declare(api)
+    base = f"/api/incidents/{code}/comms/"
+    draft = post(api, base, {"headline": "Abnormal moves", "body": CLEAN, "is_published": False, "template": "first-word"})
+    assert draft.status_code == 201 and draft.json()["approval"] == "DRAFT"
+    queued = post(api, base, {"headline": "Abnormal moves", "body": CLEAN, "submit": True, "template": "first-word"})
+    uid = queued.json()["id"]
+    assert queued.json()["approval"] == "PENDING" and queued.json()["is_published"] is False
+    assert post(api, f"{base}{uid}/publish/").status_code == 400  # not approved yet
+    assert post(api, f"{base}{uid}/approve/", {"decision": "REJECT"}).status_code == 400  # a rejection needs a reason
+    ok = post(api, f"{base}{uid}/approve/", {"decision": "APPROVE", "approver": "CEO"})
+    assert ok.json()["approval"] == "APPROVED" and ok.json()["approved_by"] == "CEO"
+    out = post(api, f"{base}{uid}/publish/", {"publisher": "Support"})
+    assert out.json()["is_published"] is True
+    logged = IncidentAction.objects.get(incident__code=code, action_type="PUBLISH_UPDATE")
+    assert logged.actor == "Support" and logged.params["audience"] == "PUBLIC"
+    public = api.get("/api/status/").json()
+    assert [u["headline"] for u in public["updates"]] == ["Abnormal moves"]
+    assert public["incidents"][0]["code"] == code and public["incidents"][0]["state"] == "investigating"
+
+
+def test_a_blocked_draft_can_be_saved_but_never_sent(api, seeded) -> None:
+    code = declare(api)
+    base = f"/api/incidents/{code}/comms/"
+    bad = {"headline": "Update", "body": "Losses were due to market conditions. Your funds are safe. Next update at 04:25 IST."}
+    refused = post(api, base, {**bad, "submit": True})
+    assert refused.status_code == 400
+    rules = {f["rule"] for f in refused.json()["findings"] if f["severity"] == "block"}
+    assert {"market-conditions", "funds-safe"} <= rules
+    assert post(api, base, bad).status_code == 400  # the one-click publish path is guarded too
+    saved = post(api, base, {**bad, "is_published": False})
+    assert saved.status_code == 201 and any(f["severity"] == "block" for f in saved.json()["guardrails"])
+    check = post(api, f"{base}check/", {"headline": "Update", "body": CLEAN}).json()
+    assert check["blocked"] is False and check["facts"]["classified"] is False
+
+
+def test_messages_to_affected_users_the_venue_or_a_regulator_never_reach_the_public_page(api, seeded) -> None:
+    code = declare(api)
+    base = f"/api/incidents/{code}/comms/"
+    for audience in ("AFFECTED", "VENUE", "REGULATOR"):
+        r = post(api, base, {"headline": f"to {audience}", "body": "Private note. Next update at 04:25 IST.", "audience": audience, "channel": "EMAIL"})
+        assert r.status_code == 201, r.content
+    assert post(api, base, {"headline": "x", "body": "Private. Next update at 04:25 IST.", "audience": "VENUE", "channel": "X"}).status_code == 400
+    assert api.get("/api/status/").json()["updates"] == []
+
+
+def test_templates_are_filled_from_the_incident(api, seeded) -> None:
+    code = declare(api, slug="oracle_defect_hip3")
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 60})
+    templates = api.get(f"/api/incidents/{code}/comms/templates/").json()
+    keys = {t["key"] for t in templates}
+    assert {"first-word", "preliminary", "the-number", "handover", "your-account", "venue-evidence-pack",
+            "sebi-glitch-notice", "fiu-ind-report"} <= keys
+    first = next(t for t in templates if t["key"] == "first-word")
+    status_page = next(d for d in first["drafts"] if d["channel"] == "STATUS_PAGE")
+    assert "TSLA-PERP" in status_page["body"] and "Next update at" in status_page["body"]
+    assert not [f for f in status_page["findings"] if f["severity"] == "block"]
+    number = next(t for t in templates if t["key"] == "the-number")["drafts"][0]
+    assert "once it is computed" in number["body"]
+
+
+def test_the_public_page_reads_the_live_system_in_plain_words(api, seeded) -> None:
+    code = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 200})
+    body = api.get("/api/status/").json()
+    app = next(c for c in body["components"] if c["name"] == "App and order API")
+    assert app["state"] == "major_outage" and body["overall"]["state"] == "major_outage"
+    for item in body["components"] + body["incidents"]:
+        assert not (set(item) & INTERNAL)
+    post(api, f"/api/incidents/{code}/action/", {"action_type": "RESOLVE", "rationale": "Handover."})
+    after = api.get("/api/status/").json()
+    assert after["overall"]["state"] == "operational"
+    assert all(c["state"] == "operational" for c in after["components"])

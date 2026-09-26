@@ -60,3 +60,11 @@ test("the clock reads T+MM:SS", () => {
   assert.equal(formatClock(252), "T+04:12");
   assert.equal(formatClock(3600), "T+60:00");
 });
+
+test("a message to a regulator or the venue is not a public update", () => {
+  const privateNote = { ...action("PUBLISH_UPDATE", 200), params: { audience: "REGULATOR" } };
+  const publicNote = { ...action("PUBLISH_UPDATE", 260), params: { audience: "PUBLIC" } };
+  const firstWord = PLAYBOOK.find((s) => s.id === "first-word")!;
+  assert.notEqual(stepStatus(firstWord, [privateNote], 280).state, "done");
+  assert.equal(stepStatus(firstWord, [privateNote, publicNote], 280).doneAt, 260);
+});

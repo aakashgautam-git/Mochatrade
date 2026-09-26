@@ -450,6 +450,22 @@ class ClaimStatus(models.TextChoices):
     PAID = "PAID", "Paid"
 
 
+class Audience(models.TextChoices):
+    PUBLIC = "PUBLIC", "Everyone"
+    AFFECTED = "AFFECTED", "Affected users"
+    VENUE = "VENUE", "The venue (Hyperliquid)"
+    REGULATOR = "REGULATOR", "Regulators"
+
+
+class Approval(models.TextChoices):
+    """COMMS drafts, the IC approves, COMMS publishes. The IC does not type."""
+
+    DRAFT = "DRAFT", "Draft"
+    PENDING = "PENDING", "Awaiting the IC"
+    APPROVED = "APPROVED", "Approved"
+    REJECTED = "REJECTED", "Sent back"
+
+
 class Channel(models.TextChoices):
     STATUS_PAGE = "STATUS_PAGE", "Status page"
     X = "X", "X"
@@ -991,6 +1007,22 @@ class CommsUpdate(models.Model):
         help_text="Always commit to a next time. 'We are investigating' with no clock is not an update.",
     )
     is_published = models.BooleanField(default=False)
+    audience = models.CharField(max_length=12, choices=Audience.choices, default=Audience.PUBLIC)
+    template = models.CharField(max_length=32, blank=True, help_text="The template it started from, if any.")
+    approval = models.CharField(max_length=10, choices=Approval.choices, default=Approval.DRAFT)
+    drafted_by = models.CharField(max_length=80, blank=True)
+    approved_by = models.CharField(max_length=80, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_note = models.TextField(blank=True)
+    guardrails = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="The language guardrails' findings when it was last checked. Blocks stop approval.",
+    )
+    solvency_verified = models.BooleanField(
+        default=False,
+        help_text="OPS attests solvency was reconciled. Without it, 'your funds are safe' is blocked.",
+    )
 
     class Meta:
         ordering = ("incident", "sequence", "channel")

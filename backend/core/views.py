@@ -23,10 +23,11 @@ from rest_framework.views import APIView
 
 from riskengine.controls import OperatorAction
 
-from . import runner
+from . import comms, runner, status_page
 from .triage import triage
 from .models import (
     ActionType,
+    Approval,
     Claim,
     ClaimStatus,
     CommsUpdate,
@@ -46,8 +47,16 @@ from .serializers import (
     ClassifyRequestSerializer,
     ClockRequestSerializer,
     ClaimSerializer,
+    CommsCheckResponseSerializer,
+    CommsCheckSerializer,
     CommsCreateSerializer,
+    CommsDecisionSerializer,
+    CommsPublishSerializer,
+    CommsTemplateSerializer,
     CommsUpdateSerializer,
+    PublicComponentSerializer,
+    PublicIncidentSerializer,
+    PublicOverallSerializer,
     CompareRequestSerializer,
     DeclareIncidentSerializer,
     IncidentActionSerializer,
@@ -766,7 +775,48 @@ class IncidentEvidenceView(APIView):
             )
 
 
+def _lint(incident, engine, *, headline, body, channel, audience, template, solvency_verified, next_update_at):
+    facts = runner.comms_facts(incident, engine)
+    if not template and audience == "PUBLIC" and not incident.updates.filter(is_published=True, audience="PUBLIC").exists():
+        template = "first-word"
+    findings = comms.lint(
+        headline, body, channel=channel, audience=audience, template=template, facts=facts,
+        solvency_verified=solvency_verified, has_next_update_at=next_update_at is not None,
+    )
+    return facts, template, findings
+
+
+def _blocked(findings) -> Response:
+    first = comms.blocking(findings)[0]
+    return Response(
+        {
+            "detail": f"Blocked by the language guardrails: {first.message}",
+            "findings": [f.as_dict() for f in findings],
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _log_publish(incident, engine, update: CommsUpdate, actor: str) -> None:
+    IncidentAction.objects.create(
+        incident=incident,
+        tick=engine.tick if not engine.finished else runner.drill_clock(incident, engine),
+        actor=actor,
+        action_type=ActionType.PUBLISH_UPDATE,
+        params={"channel": update.channel, "sequence": update.sequence, "audience": update.audience},
+        rationale=update.headline,
+    )
+
+
 class IncidentCommsView(APIView):
+    """GET/POST /api/incidents/{code}/comms/ -- drafts, the queue, and what went out.
+
+    POST runs the language guardrails on everything. A draft may be saved with
+    findings; nothing with a BLOCK finding can be sent to the IC or published.
+    `is_published` (the default, used by the war room's one-click update) means
+    approved in the room by the IC and published now.
+    """
+
     def get(self, request: Request, code: str) -> Response:
         incident = _incident(code)
         return Response(CommsUpdateSerializer(incident.updates.all(), many=True).data)
@@ -778,6 +828,17 @@ class IncidentCommsView(APIView):
             if not req.is_valid():
                 return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
             data = req.validated_data
+            if data["template"] and data["template"] not in comms.TEMPLATE_BY_KEY:
+                return _bad(f"No template {data['template']!r}.")
+            engine = runner.live_engine(incident)
+            _, template, findings = _lint(
+                incident, engine, headline=data["headline"], body=data["body"], channel=data["channel"],
+                audience=data["audience"], template=data["template"],
+                solvency_verified=data["solvency_verified"], next_update_at=data.get("next_update_at"),
+            )
+            publish = data.get("is_published", True) and not data["submit"]
+            if (publish or data["submit"]) and comms.blocking(findings):
+                return _blocked(findings)
 
             sequence = data.get("sequence") or (
                 (incident.updates.order_by("-sequence").values_list("sequence", flat=True).first() or 0)
@@ -786,7 +847,7 @@ class IncidentCommsView(APIView):
             if incident.updates.filter(sequence=sequence, channel=data["channel"]).exists():
                 return _bad(f"Update #{sequence} on {data['channel']} already exists.")
 
-            publish = data.get("is_published", True)
+            now = timezone.now()
             update = CommsUpdate.objects.create(
                 incident=incident,
                 sequence=sequence,
@@ -794,20 +855,141 @@ class IncidentCommsView(APIView):
                 headline=data["headline"],
                 body=data["body"],
                 next_update_at=data.get("next_update_at"),
+                audience=data["audience"],
+                template=template,
+                drafted_by=data["drafted_by"] or incident.comms_lead or "COMMS",
+                solvency_verified=data["solvency_verified"],
+                guardrails=[f.as_dict() for f in findings],
+                approval=(
+                    Approval.APPROVED if publish else Approval.PENDING if data["submit"] else Approval.DRAFT
+                ),
+                approved_by=(incident.incident_commander or "IC") if publish else "",
+                approved_at=now if publish else None,
+                approval_note="Approved in the room." if publish else "",
                 is_published=publish,
-                published_at=timezone.now() if publish else None,
+                published_at=now if publish else None,
             )
             if publish:
-                engine = runner.live_engine(incident)
-                IncidentAction.objects.create(
-                    incident=incident,
-                    tick=engine.tick,
-                    actor=incident.comms_lead or "COMMS",
-                    action_type=ActionType.PUBLISH_UPDATE,
-                    params={"channel": update.channel, "sequence": update.sequence},
-                    rationale=update.headline,
-                )
+                _log_publish(incident, engine, update, incident.comms_lead or "COMMS")
             return Response(CommsUpdateSerializer(update).data, status=status.HTTP_201_CREATED)
+
+
+class IncidentCommsCheckView(APIView):
+    """POST /api/incidents/{code}/comms/check/ -- the guardrails, run live on a draft."""
+
+    def post(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            req = CommsCheckSerializer(data=request.data)
+            req.is_valid(raise_exception=True)
+            data = req.validated_data
+            engine = runner.live_engine(incident)
+            facts, _, findings = _lint(
+                incident, engine, headline=data["headline"], body=data["body"], channel=data["channel"],
+                audience=data["audience"], template=data["template"],
+                solvency_verified=data["solvency_verified"], next_update_at=data.get("next_update_at"),
+            )
+            return Response(CommsCheckResponseSerializer({
+                "findings": [f.as_dict() for f in findings],
+                "blocked": bool(comms.blocking(findings)),
+                "facts": {
+                    "classified": facts.classified, "category": facts.category, "affected": facts.affected,
+                    "claims_open": facts.claims_open, "pro_rata": facts.pro_rata, "ratio": facts.ratio,
+                    "next_update": comms._ist(comms._at(facts, comms.next_update_seconds(facts.drill_seconds))),
+                },
+            }).data)
+
+
+class IncidentCommsTemplatesView(APIView):
+    """GET /api/incidents/{code}/comms/templates/ -- every template, filled from
+    this incident's own record, per channel, with its guardrail findings."""
+
+    def get(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            facts = runner.comms_facts(incident, engine)
+            out = []
+            for t in comms.TEMPLATES:
+                drafts = []
+                for channel in t.channels:
+                    headline, body = t.render(facts, channel)
+                    findings = comms.lint(
+                        headline, body, channel=channel, audience=t.audience, template=t.key, facts=facts,
+                        solvency_verified=False, has_next_update_at=False,
+                    )
+                    drafts.append({"channel": channel, "headline": headline, "body": body,
+                                   "findings": [f.as_dict() for f in findings]})
+                out.append({
+                    "key": t.key, "audience": t.audience, "audience_display": comms.AUDIENCES[t.audience],
+                    "channels": list(t.channels), "title": t.title, "when": t.when, "drafts": drafts,
+                })
+            return Response(CommsTemplateSerializer(out, many=True).data)
+
+
+class CommsDecisionView(APIView):
+    """POST /api/incidents/{code}/comms/{id}/approve/ -- the IC's call.
+
+    Approval re-runs the guardrails against the incident as it stands now: a
+    number that was fine when drafted can be wrong by the time it is approved.
+    """
+
+    def post(self, request: Request, code: str, update_id: int) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            update = get_object_or_404(CommsUpdate, pk=update_id, incident=incident)
+            req = CommsDecisionSerializer(data=request.data)
+            req.is_valid(raise_exception=True)
+            data = req.validated_data
+            if update.approval != Approval.PENDING:
+                return _bad(f"Only an update awaiting the IC can be decided; this one is {update.get_approval_display().lower()}.")
+            approver = data["approver"] or incident.incident_commander or "IC"
+            if data["decision"] == "REJECT":
+                if not data["note"].strip():
+                    return _bad("Say why it goes back, so COMMS can fix it.")
+                update.approval = Approval.REJECTED
+                update.approval_note = data["note"]
+                update.approved_by = approver
+                update.approved_at = timezone.now()
+                update.save(update_fields=["approval", "approval_note", "approved_by", "approved_at"])
+                return Response(CommsUpdateSerializer(update).data)
+            engine = runner.live_engine(incident)
+            _, _, findings = _lint(
+                incident, engine, headline=update.headline, body=update.body, channel=update.channel,
+                audience=update.audience, template=update.template,
+                solvency_verified=update.solvency_verified, next_update_at=update.next_update_at,
+            )
+            update.guardrails = [f.as_dict() for f in findings]
+            if comms.blocking(findings):
+                update.save(update_fields=["guardrails"])
+                return _blocked(findings)
+            update.approval = Approval.APPROVED
+            update.approved_by = approver
+            update.approved_at = timezone.now()
+            update.approval_note = data["note"]
+            update.save(update_fields=["approval", "approved_by", "approved_at", "approval_note", "guardrails"])
+            return Response(CommsUpdateSerializer(update).data)
+
+
+class CommsPublishView(APIView):
+    """POST /api/incidents/{code}/comms/{id}/publish/ -- COMMS sends what the IC approved."""
+
+    def post(self, request: Request, code: str, update_id: int) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            update = get_object_or_404(CommsUpdate, pk=update_id, incident=incident)
+            req = CommsPublishSerializer(data=request.data)
+            req.is_valid(raise_exception=True)
+            if update.is_published:
+                return _bad("Already published.")
+            if update.approval != Approval.APPROVED:
+                return _bad("Only an update the IC approved can be published.")
+            update.is_published = True
+            update.published_at = timezone.now()
+            update.save(update_fields=["is_published", "published_at"])
+            engine = runner.live_engine(incident)
+            _log_publish(incident, engine, update, req.validated_data["publisher"] or incident.comms_lead or "COMMS")
+            return Response(CommsUpdateSerializer(update).data)
 
 
 class IncidentReportView(APIView):
@@ -848,15 +1030,57 @@ class IncidentReportView(APIView):
 # --------------------------------------------------------------------------
 
 class PublicStatusView(APIView):
-    """GET /api/status/ -- the public status page. Published updates only."""
+    """GET /api/status/ -- the public status page.
+
+    Published updates to everyone, never a draft and never a message meant for
+    affected users, the venue or a regulator. Component states come from the
+    live system for the newest open incident. Nothing internal crosses: see
+    PublicStatusUpdateSerializer.
+    """
 
     authentication_classes: list = []
     permission_classes: list = []
 
     def get(self, request: Request) -> Response:
-        qs = (
-            CommsUpdate.objects.filter(is_published=True)
+        public = (
+            CommsUpdate.objects.filter(is_published=True, audience="PUBLIC")
             .select_related("incident")
             .order_by("-published_at", "-sequence")
         )
-        return Response({"updates": PublicStatusUpdateSerializer(qs, many=True).data})
+        live = Incident.objects.exclude(status=IncidentStatus.RESOLVED).exclude(run=None).order_by("-declared_at").first()
+        if live is not None:
+            with runner.lock_for(live.code):
+                engine = runner.live_engine(live)
+                items = status_page.components(engine, resolved=False)
+        else:
+            latest = Incident.objects.exclude(run=None).order_by("-declared_at").first()
+            items = status_page.all_clear(
+                runner.engine_scenario(latest.run.scenario).instrument if latest and latest.run else None
+            )
+        incidents = []
+        seen: list[int] = []
+        for u in public:
+            if u.incident_id in seen:
+                continue
+            seen.append(u.incident_id)
+            if len(seen) > 5:
+                break
+            inc = u.incident
+            ups = [x for x in public if x.incident_id == inc.pk]
+            first = min(ups, key=lambda x: (x.published_at, x.sequence))
+            incidents.append({
+                "code": inc.code,
+                "title": first.headline,
+                "severity": inc.get_severity_display(),
+                "started_at": inc.declared_at,
+                "resolved_at": inc.resolved_at,
+                "state": status_page.PUBLIC_PHASE.get(inc.status, "investigating"),
+                "updates": ups,
+            })
+        return Response({
+            "overall": PublicOverallSerializer(status_page.overall(items)).data,
+            "components": PublicComponentSerializer(items, many=True).data,
+            "incidents": PublicIncidentSerializer(incidents, many=True).data,
+            "updates": PublicStatusUpdateSerializer(public, many=True).data,
+            "as_of": status_page.as_of(),
+        })

@@ -74,7 +74,10 @@ export interface StepStatus {
 export function stepStatus(step: PlaybookStep, actions: readonly IncidentAction[], clock: number): StepStatus {
   let doneAt: number | null = null;
   for (const rule of step.completes) {
-    const hits = actions.filter((a) => a.action_type === rule.type);
+    // A message to a regulator or the venue is not a public update.
+    const hits = actions.filter(
+      (a) => a.action_type === rule.type && (rule.type !== "PUBLISH_UPDATE" || (a.params["audience"] ?? "PUBLIC") === "PUBLIC"),
+    );
     const needed = rule.count ?? 1;
     const hit = hits[needed - 1];
     if (hit && (doneAt === null || hit.tick < doneAt)) doneAt = hit.tick;

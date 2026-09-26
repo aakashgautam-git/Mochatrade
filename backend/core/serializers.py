@@ -475,12 +475,17 @@ class ClaimDecisionSerializer(serializers.Serializer):
 
 class CommsUpdateSerializer(serializers.ModelSerializer):
     channel_display = serializers.CharField(source="get_channel_display", read_only=True)
+    audience_display = serializers.CharField(source="get_audience_display", read_only=True)
+    approval_display = serializers.CharField(source="get_approval_display", read_only=True)
 
     class Meta:
         model = CommsUpdate
         fields = (
             "id", "sequence", "channel", "channel_display", "headline", "body",
-            "published_at", "next_update_at", "is_published",
+            "published_at", "next_update_at", "is_published", "audience",
+            "audience_display", "template", "approval", "approval_display",
+            "drafted_by", "approved_by", "approved_at", "approval_note",
+            "guardrails", "solvency_verified",
         )
 
 
@@ -496,6 +501,13 @@ class CommsCreateSerializer(serializers.Serializer):
     sequence = serializers.IntegerField(required=False, min_value=1)
     next_update_at = serializers.DateTimeField(required=False, allow_null=True)
     is_published = serializers.BooleanField(default=True)
+    audience = serializers.ChoiceField(choices=["PUBLIC", "AFFECTED", "VENUE", "REGULATOR"], default="PUBLIC")
+    template = serializers.CharField(required=False, allow_blank=True, default="", max_length=32)
+    drafted_by = serializers.CharField(required=False, allow_blank=True, default="", max_length=80)
+    solvency_verified = serializers.BooleanField(default=False)
+    submit = serializers.BooleanField(
+        default=False, help_text="Send straight to the IC for approval instead of saving a draft."
+    )
 
 
 class PublicStatusUpdateSerializer(serializers.ModelSerializer):
@@ -660,3 +672,89 @@ class RecalibrationSerializer(serializers.Serializer):
 
 class RecalibrateRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(required=False, allow_blank=True, default="Risk")
+
+
+class FindingSerializer(serializers.Serializer):
+    rule = serializers.CharField()
+    severity = serializers.ChoiceField(choices=["block", "warn"])
+    message = serializers.CharField()
+    source = serializers.CharField()
+    match = serializers.CharField(allow_null=True)
+
+
+class CommsCheckSerializer(serializers.Serializer):
+    headline = serializers.CharField(allow_blank=True, default="")
+    body = serializers.CharField(allow_blank=True, default="")
+    channel = serializers.ChoiceField(choices=["STATUS_PAGE", "X", "WHATSAPP", "TELEGRAM", "EMAIL"], default="STATUS_PAGE")
+    audience = serializers.ChoiceField(choices=["PUBLIC", "AFFECTED", "VENUE", "REGULATOR"], default="PUBLIC")
+    template = serializers.CharField(required=False, allow_blank=True, default="")
+    solvency_verified = serializers.BooleanField(default=False)
+    next_update_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class CommsFactsSerializer(serializers.Serializer):
+    classified = serializers.BooleanField()
+    category = serializers.CharField(allow_blank=True)
+    affected = serializers.IntegerField()
+    claims_open = serializers.BooleanField()
+    pro_rata = serializers.BooleanField()
+    ratio = serializers.FloatField()
+    next_update = serializers.CharField()
+
+
+class CommsCheckResponseSerializer(serializers.Serializer):
+    findings = FindingSerializer(many=True)
+    blocked = serializers.BooleanField()
+    facts = CommsFactsSerializer()
+
+
+class TemplateDraftSerializer(serializers.Serializer):
+    channel = serializers.CharField()
+    headline = serializers.CharField()
+    body = serializers.CharField()
+    findings = FindingSerializer(many=True)
+
+
+class CommsTemplateSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    audience = serializers.CharField()
+    audience_display = serializers.CharField()
+    channels = serializers.ListField(child=serializers.CharField())
+    title = serializers.CharField()
+    when = serializers.CharField()
+    drafts = TemplateDraftSerializer(many=True)
+
+
+class CommsDecisionSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=["APPROVE", "REJECT"])
+    approver = serializers.CharField(required=False, allow_blank=True, default="")
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class CommsPublishSerializer(serializers.Serializer):
+    publisher = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class PublicComponentSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    state = serializers.CharField()
+    state_label = serializers.CharField()
+    note = serializers.CharField()
+
+
+class PublicOverallSerializer(serializers.Serializer):
+    state = serializers.CharField()
+    headline = serializers.CharField()
+
+
+class PublicIncidentSerializer(serializers.Serializer):
+    """An incident as the public sees it: when, how bad, where it stands, and
+    what we said. Its internal record never crosses this line."""
+
+    code = serializers.CharField()
+    title = serializers.CharField()
+    severity = serializers.CharField()
+    started_at = serializers.DateTimeField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    state = serializers.CharField()
+    updates = PublicStatusUpdateSerializer(many=True)

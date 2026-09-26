@@ -33,6 +33,10 @@ urlpatterns = [
         name="claim-decide",
     ),
     path("incidents/<str:code>/comms/", views.IncidentCommsView.as_view(), name="incident-comms"),
+    path("incidents/<str:code>/comms/check/", views.IncidentCommsCheckView.as_view(), name="incident-comms-check"),
+    path("incidents/<str:code>/comms/templates/", views.IncidentCommsTemplatesView.as_view(), name="incident-comms-templates"),
+    path("incidents/<str:code>/comms/<int:update_id>/approve/", views.CommsDecisionView.as_view(), name="comms-approve"),
+    path("incidents/<str:code>/comms/<int:update_id>/publish/", views.CommsPublishView.as_view(), name="comms-publish"),
     path("incidents/<str:code>/report/", views.IncidentReportView.as_view(), name="incident-report"),
 
     path("status/", views.PublicStatusView.as_view(), name="public-status"),
