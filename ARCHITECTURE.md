@@ -16,7 +16,9 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > protected macro run went from 56 pauses and 83 swings to 7 and 10. Two
 > decisions are open; see "Open decisions" below. 313 tests green.
 >
-> **NEXT: PHASE 6 — Simulator surface.** Await instructions before starting.
+> **PHASE 6 — SIMULATOR SURFACE (complete).** The simulator UI, playback, charts, derived metrics (ladder, spans, cascade split).
+>
+> **NEXT: PHASE 7 — War room. Await instructions.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -40,8 +42,8 @@ trustworthy engine more than it needs a database.
 | 4 | REST API | Done |
 | 5 | Design system | Done |
 | 5.5 | Engine fix — velocity cooldown, reopening auction, Phase 6 data | Done |
-| 6 | Simulator surface | **Next** |
-| 7 | War room | Not started |
+| 6 | Simulator surface | **Done** |
+| 7 | War room | **Next** |
 | 8 | Forensics | Not started |
 | 9 | Remediation — claims, make-whole, pro-rata cap overflow | Not started |
 | 10 | Comms | Not started |
