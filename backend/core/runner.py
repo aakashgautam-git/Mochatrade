@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from datetime import timedelta
 from dataclasses import asdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -36,7 +37,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from riskengine import classifier
+from riskengine import classifier, remediation
 from riskengine.controls import ActionKind, ControlStack, OperatorAction
 from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
@@ -44,13 +45,17 @@ from riskengine.scenario import by_key
 
 from .models import (
     ENGINE_SOURCE,
+    SCALAR_PARAM_NAMES,
     ActionType,
     Claim,
     ClaimStatus,
     DepthSnapshot,
+    Incident,
     IncidentAction,
     IncidentStatus,
     LiquidationRecord,
+    PolicyInstrumentTier,
+    PolicyMarginTier,
     PriceObservation,
     PriceSource,
     RiskPolicy,
@@ -90,15 +95,29 @@ def params_for(policy: RiskPolicy):
     return policy.to_params()
 
 
+FUNDING_ONLY: frozenset[str] = frozenset({
+    "incident_reserve_opening_inr",
+    "reserve_funding_share_of_fees",
+    "reserve_target_multiple_of_worst_loss",
+})
+"""Parameters that decide who FUNDS a payout and nothing else: neither the
+engine nor the classifier nor any make-whole formula reads them. A new policy
+version that differs only here produces byte-identical runs, so it must hit the
+same cache -- which is also how 'Recalibrate from simulation' shows its loop
+closing in one step."""
+
+
 def fingerprint(params: Any) -> str:
     """A stable hash of everything that determines a stored run's contents.
 
     Two inputs. The parameter VALUES, not the version string -- a policy edit
-    that leaves the version alone still has to invalidate every cached run. And
-    the engine's FRAME_SCHEMA -- a run stored before a frame field existed must
-    not be served as though it had that field.
+    that leaves the version alone still has to invalidate every cached run, and
+    a new version with identical values must not. And the engine's
+    FRAME_SCHEMA -- a run stored before a frame field existed must not be
+    served as though it had that field.
     """
-    payload = {"frame_schema": FRAME_SCHEMA, "params": asdict(params)}
+    values = {k: v for k, v in asdict(params).items() if k != "version" and k not in FUNDING_ONLY}
+    payload = {"frame_schema": FRAME_SCHEMA, "params": values}
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
 
@@ -163,9 +182,8 @@ def get_or_run(
     if cached is not None:
         return cached, False
 
-    result = Engine(
-        scenario, params, control_stack(controls_enabled), seed=effective_seed
-    ).run()
+    engine = Engine(scenario, params, control_stack(controls_enabled), seed=effective_seed)
+    result = engine.run()
     frames = [f.as_dict() for f in result.frames]
 
     # One transaction: a DONE run without its tape would be served from the
@@ -181,6 +199,7 @@ def get_or_run(
             current_tick=len(frames),
             total_ticks=len(frames),
             result_summary=result.summary.as_dict(),
+            modelled_claims=_modelled(engine),
             tick_data=frames,
         )
         write_observations(run, frames)
@@ -518,7 +537,7 @@ def classify_incident(incident, engine: Engine, *, actor: str, rationale: str):
             a = by_id[v.account_id]
             equity, counterfactual = engine.valuation(a)
             claim = claims.get(v.account_id)
-            if claim is not None and claim.status in DECIDED:
+            if claim is not None and claim.status in DECIDED and claim.decided_by:
                 continue
             claim = claim or Claim(incident=incident, account=accounts[v.account_id])
             claim.category = v.category
@@ -565,3 +584,264 @@ def classify_incident(incident, engine: Engine, *, actor: str, rationale: str):
             reversible=True,
         )
     return result
+
+
+# --------------------------------------------------------------------------
+# Remediation: make-whole, the waterfall, and the reserve's own calibration
+# --------------------------------------------------------------------------
+
+def _remedies_for(engine: Engine, verdict):
+    accounts = {a.id: a for a in engine.accounts}
+    valuations = {v.account_id: engine.valuation(accounts[v.account_id]) for v in verdict.accounts}
+    return remediation.remedies(verdict, accounts, engine.events, engine.frames, valuations)
+
+
+def _modelled(engine: Engine) -> dict[str, Any]:
+    """What a finished run would owe under the published formulas, uncapped."""
+    verdict = classifier.classify(
+        engine.scenario, engine.params, engine.frames, engine.events, engine.accounts,
+        finished=engine.finished,
+    )
+    items = _remedies_for(engine, verdict)
+    cash = [r for r in items if r.kind == "cash"]
+    return {
+        "category": verdict.category,
+        "claims_total_inr": round(sum(r.make_whole for r in cash), 2),
+        "cash_accounts": len(cash),
+        "counts": verdict.counts,
+    }
+
+
+def modelled_claims(run: SimRun) -> dict[str, Any]:
+    """A cached run's modelled claims, computed once for runs stored before
+    claims were modelled. Deterministic: the replay is the same run."""
+    if run.modelled_claims:
+        return run.modelled_claims
+    params = params_for(run.policy)
+    engine = Engine(
+        engine_scenario(run.scenario), params, control_stack(run.controls_enabled), seed=run.seed
+    )
+    engine.run()
+    run.modelled_claims = _modelled(engine)
+    run.save(update_fields=["modelled_claims"])
+    return run.modelled_claims
+
+
+def reserve_drawn_by_others(incident) -> float:
+    """What earlier incidents have already drawn from the Incident Reserve. The
+    reserve is one ring-fenced balance, published, so a second incident in the
+    same month sees what the first one left."""
+    drawn = 0.0
+    for other in Incident.objects.exclude(pk=incident.pk).exclude(remediation_detail={}):
+        tranches = (other.remediation_detail.get("waterfall") or {}).get("tranches") or []
+        drawn += sum(float(t.get("drawn") or 0.0) for t in tranches if t.get("step") == 2)
+    return drawn
+
+
+def open_claims(incident, engine: Engine, *, actor: str, rationale: str):
+    """Size every claim by the published formula for its class and fund the
+    lot through the waterfall, in order, up to the per-incident cap.
+
+    Clear-cut C/D/E claims are auto-approved and their provisional credit is
+    set now, due inside the speed-clause window: nobody files a ticket to get
+    their own money back. G waits for the IC. A, B and F owe no cash: B's fees
+    are rebated, F's evidence pack goes to the venue. A claim a human already
+    decided keeps its decision; a rejected one draws nothing.
+    """
+    detail = incident.classification_detail or {}
+    if not detail or detail.get("at_tick") != (engine.frames[-1].tick if engine.frames else 0):
+        classify_incident(
+            incident, engine, actor=actor,
+            rationale="Re-run before sizing claims, so every claim is judged on the full tape.",
+        )
+        incident.refresh_from_db()
+    params = engine.params
+    verdict = classifier.classify(
+        engine.scenario, params, engine.frames, engine.events, engine.accounts, finished=engine.finished,
+    )
+    items = {r.account_id: r for r in _remedies_for(engine, verdict)}
+    claims = {c.account.handle: c for c in incident.claims.select_related("account")}
+    rejected = {h for h, c in claims.items() if c.status == ClaimStatus.REJECTED and c.decided_by}
+    funded = [r for h, r in items.items() if h not in rejected]
+    reserve_available = max(0.0, params.incident_reserve_opening_inr - reserve_drawn_by_others(incident))
+    plan = remediation.waterfall(funded, params, reserve_available=reserve_available)
+    deadline = incident.declared_at + timedelta(minutes=params.provisional_credit_minutes)
+    tick = engine.tick if not engine.finished else drill_clock(incident, engine)
+
+    with transaction.atomic():
+        for handle, r in items.items():
+            claim = claims.get(handle)
+            if claim is None or (claim.status in DECIDED and claim.decided_by):
+                continue
+            cash = r.make_whole * plan.ratio if r.kind == "cash" else 0.0
+            claim.claimed_inr = _inr(r.make_whole)
+            claim.approved_inr = _inr(cash) if r.category in remediation.PROVISIONAL_CLASSES else Decimal("0")
+            claim.provisional_credit_inr = (
+                _inr(cash) if r.category in remediation.PROVISIONAL_CLASSES else Decimal("0")
+            )
+            if r.category in remediation.PROVISIONAL_CLASSES:
+                claim.status = ClaimStatus.AUTO_APPROVED
+            elif r.category == "B":
+                claim.status = ClaimStatus.AUTO_APPROVED
+            elif r.category == "G":
+                claim.status = ClaimStatus.PENDING
+            else:
+                claim.status = ClaimStatus.REJECTED
+            claim.evidence = {
+                **(claim.evidence or {}),
+                "remedy": {
+                    **r.as_dict(),
+                    "cash_inr": round(cash, 2),
+                    "make_good_inr": round(r.make_whole - cash, 2) if r.kind == "cash" else 0.0,
+                    "pro_rata": plan.pro_rata and r.kind == "cash",
+                },
+            }
+            claim.save()
+
+        incident.aggregate_exposure_inr = _inr(plan.total_claims)
+        incident.remediation_detail = {
+            "policy_version": params.version,
+            "computed_at_tick": tick,
+            "provisional_deadline": deadline.isoformat(),
+            "provisional_minutes": params.provisional_credit_minutes,
+            "reserve": {
+                "opening": params.incident_reserve_opening_inr,
+                "drawn_by_other_incidents": round(params.incident_reserve_opening_inr - reserve_available, 2),
+                "available": round(reserve_available, 2),
+            },
+            "waterfall": plan.as_dict(),
+        }
+        if incident.status != IncidentStatus.RESOLVED:
+            incident.status = IncidentStatus.REMEDIATING
+        incident.save(update_fields=["aggregate_exposure_inr", "remediation_detail", "status"])
+        IncidentAction.objects.create(
+            incident=incident,
+            tick=tick,
+            actor=actor,
+            action_type=ActionType.OPEN_CLAIMS,
+            params={
+                "total_claims": round(plan.total_claims, 2),
+                "payable": round(plan.payable, 2),
+                "pro_rata": plan.pro_rata,
+                "ratio": round(plan.ratio, 4),
+            },
+            rationale=rationale or (
+                f"Claims opened: {classifier.inr_text(plan.total_claims)} claimed, {classifier.inr_text(plan.payable)} payable"
+                + (f", pro-rata at {plan.ratio:.1%} above the {classifier.inr_text(plan.cap)} cap." if plan.pro_rata else ", every claim in full.")
+            ),
+            reversible=True,
+        )
+    return plan
+
+
+def _next_version() -> str:
+    numbers = [
+        int(v[1:]) for v in RiskPolicy.objects.values_list("version", flat=True)
+        if v.startswith("v") and v[1:].isdigit()
+    ]
+    return f"v{max(numbers, default=0) + 1}"
+
+
+def clone_policy(policy: RiskPolicy, *, version: str, notes: str, **changes: Any) -> RiskPolicy:
+    """A new, active version: every value copied, the named ones changed, the
+    ladders copied row for row. The round trip is checked before returning."""
+    values = {name: getattr(policy, name) for name in SCALAR_PARAM_NAMES}
+    unknown = set(changes) - set(values)
+    if unknown:
+        raise ValueError(f"Not policy parameters: {sorted(unknown)}")
+    values.update(changes)
+    with transaction.atomic():
+        new = RiskPolicy.objects.create(version=version, name=policy.name, is_active=True, notes=notes, **values)
+        for t in policy.margin_tier_rows.all():
+            PolicyMarginTier.objects.create(
+                policy=new, ordering=t.ordering, notional_floor=t.notional_floor,
+                notional_ceiling=t.notional_ceiling, max_leverage=t.max_leverage, mm_pct=t.mm_pct,
+            )
+        for t in policy.instrument_tier_rows.all():
+            PolicyInstrumentTier.objects.create(
+                policy=new, tier=t.tier, label=t.label, nrr_pct=t.nrr_pct,
+                nrr_offhours_pct=t.nrr_offhours_pct, dcb_variant_pct=t.dcb_variant_pct,
+            )
+        expected = params_for(policy).evolve(version=version, **changes)
+        if params_for(new) != expected:
+            raise RuntimeError("The cloned policy does not round-trip. Nothing was written.")
+    return new
+
+
+def recalibrate_reserve(*, actor: str) -> dict[str, Any]:
+    """'Recalibrate from simulation'. Research 5.3 sizes the Incident Reserve
+    at 2x the worst modelled 30-day loss -- a number only the simulator can
+    produce, under a policy that already needs a reserve. Resolve it: run every
+    seeded scenario both ways under the active policy, take the worst cash
+    liability under the published formulas, and write a new version whose
+    reserve is the target. The per-incident cap is not touched.
+
+    Because the reserve feeds neither the engine nor the classifier, the new
+    version's runs are the same runs -- the fingerprint says so -- and the
+    worst loss under it is the same number. The loop closes in one step; a
+    second recalibration writes nothing.
+    """
+    policy = active_policy()
+    params = params_for(policy)
+    rows = list(Scenario.objects.select_related("instrument").order_by("slug"))
+    if not rows:
+        raise ScenarioUnavailable("No scenarios to model. Run `manage.py seed_scenarios`.")
+    table: list[dict[str, Any]] = []
+    for row in rows:
+        for enabled in (True, False):
+            run, _ = get_or_run(row, controls_enabled=enabled, policy=policy)
+            m = modelled_claims(run)
+            table.append({
+                "slug": row.slug,
+                "name": row.name,
+                "controls_enabled": enabled,
+                "category": m["category"],
+                "claims_total_inr": money(m["claims_total_inr"]),
+                "cash_accounts": m["cash_accounts"],
+                "above_cap": m["claims_total_inr"] > params.per_incident_cap_inr,
+                "run_id": run.pk,
+            })
+    worst = max(table, key=lambda r: Decimal(r["claims_total_inr"]))
+    worst_loss = float(worst["claims_total_inr"])
+    target = round(remediation.reserve_target(worst_loss, params), 2)
+    previous = params.incident_reserve_opening_inr
+    converged = abs(target - previous) < 1.0
+
+    new_policy = None
+    if not converged:
+        version = _next_version()
+        new_policy = clone_policy(
+            policy,
+            version=version,
+            notes=(
+                f"Recalibrated from simulation by {actor} on "
+                f"{timezone.localtime():%d %b %Y %H:%M} IST. Worst modelled loss: {classifier.inr_text(worst_loss)} "
+                f"({worst['name']}, controls {'on' if worst['controls_enabled'] else 'off'}) across "
+                f"{len(table)} seeded runs under {policy.version}. Reserve set to "
+                f"{params.reserve_target_multiple_of_worst_loss:g}x that: {classifier.inr_text(target)} "
+                f"(was {classifier.inr_text(previous)}). Per-incident cap unchanged at {classifier.inr_text(params.per_incident_cap_inr)}."
+            ),
+            incident_reserve_opening_inr=target,
+        )
+    same_runs = fingerprint(params_for(new_policy)) == fingerprint(params) if new_policy else True
+    return {
+        "previous_version": policy.version,
+        "new_version": new_policy.version if new_policy else None,
+        "active_version": (new_policy or policy).version,
+        "rows": table,
+        "worst": worst,
+        "multiple": params.reserve_target_multiple_of_worst_loss,
+        "previous_reserve_inr": money(previous),
+        "target_reserve_inr": money(target),
+        "cap_inr": money(params.per_incident_cap_inr),
+        "converged": converged,
+        "same_runs": same_runs,
+        "explanation": (
+            "Already at the fixed point: the reserve equals the target the simulation gives, "
+            "so no new version was written."
+            if converged else
+            f"{new_policy.version if new_policy else ''} differs from {policy.version} only in the reserve, "
+            "which neither the engine nor the classifier reads. Its runs are the same cached runs, "
+            "so recalibrating again gives the same target and writes nothing: the loop closed in one step."
+        ),
+    }

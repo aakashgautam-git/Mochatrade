@@ -594,6 +594,15 @@ class SimRun(models.Model):
     current_tick = models.PositiveIntegerField(default=0)
     total_ticks = models.PositiveIntegerField(default=0)
     result_summary = models.JSONField(default=dict, blank=True)
+    modelled_claims = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "What this run would owe under the published remedy formulas: the "
+            "classifier's verdict and the uncapped cash claims total. Read by "
+            "'Recalibrate from simulation' to size the Incident Reserve."
+        ),
+    )
     tick_data = models.JSONField(
         default=list, blank=True, help_text="The full frame series. One entry per tick."
     )
@@ -812,6 +821,15 @@ class Incident(models.Model):
     affected_accounts_count = models.PositiveIntegerField(default=0)
     aggregate_exposure_inr = models.DecimalField(
         max_digits=20, decimal_places=2, default=Decimal("0")
+    )
+    remediation_detail = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "The funding waterfall as computed when claims were opened: total "
+            "claimed, the cap, what each source drew, the pro-rata ratio if the "
+            "cap bound, and the provisional-credit deadline."
+        ),
     )
     classification_detail = models.JSONField(
         default=dict,

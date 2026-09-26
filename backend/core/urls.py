@@ -7,6 +7,7 @@ app_name = "core"
 
 urlpatterns = [
     path("policies/", views.PolicyListView.as_view(), name="policies"),
+    path("policies/recalibrate/", views.PolicyRecalibrateView.as_view(), name="policies-recalibrate"),
     path("instruments/", views.InstrumentListView.as_view(), name="instruments"),
     path("scenarios/", views.ScenarioListView.as_view(), name="scenarios"),
     path("scenarios/<slug:slug>/", views.ScenarioDetailView.as_view(), name="scenario-detail"),

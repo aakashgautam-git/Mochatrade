@@ -6,6 +6,7 @@ import { Forensics } from "./pages/Forensics";
 import { KitchenSink } from "./pages/KitchenSink";
 import { LegacyDemo } from "./pages/LegacyDemo";
 import { Placeholder } from "./pages/Placeholder";
+import { Remediation } from "./pages/Remediation";
 import { Simulator } from "./pages/Simulator";
 import { WarRoom } from "./pages/WarRoom";
 
@@ -57,6 +58,14 @@ export function App() {
     return (
       <Shell current={section} title="Forensics" isDocument={false}>
         <Forensics />
+      </Shell>
+    );
+  }
+
+  if (path === "/remediation") {
+    return (
+      <Shell current={section} title="Remediation" isDocument={false}>
+        <Remediation />
       </Shell>
     );
   }

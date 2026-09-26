@@ -560,6 +560,95 @@ export interface AccountEvidence {
   upi: { amount: number; initiated_tick: number; settles_tick: number | null; credit_advanced: number } | null;
   equity_inr: number;
   counterfactual_equity_inr: number;
+  /** Set once claims are opened: the published formula, applied. */
+  remedy?: RemedyEvidence;
+}
+
+export interface RemedyEvidence {
+  account_id: string;
+  category: RemedyClass;
+  kind: "cash" | "fee_rebate" | "none";
+  /** The full claim under the published formula, before any cap. */
+  make_whole: number;
+  fee_rebate: number;
+  basis: string;
+  equity_now: number;
+  reference_equity: number | null;
+  provisional: boolean;
+  cash_inr: number;
+  make_good_inr: number;
+  pro_rata: boolean;
+}
+
+export interface Tranche {
+  step: number;
+  source: string;
+  drawn: number;
+  available: number | null;
+  note: string;
+}
+
+export interface Waterfall {
+  total_claims: number;
+  cap: number;
+  payable: number;
+  pro_rata: boolean;
+  /** Cash paid per rupee claimed. 1 unless the cap binds. */
+  ratio: number;
+  shortfall: number;
+  reserve_opening: number;
+  reserve_available: number;
+  reserve_after: number;
+  fee_rebates: number;
+  tranches: Tranche[];
+  formula: string;
+}
+
+export interface Remediation {
+  policy_version: string;
+  computed_at_tick: number;
+  provisional_deadline: IsoDateTime;
+  provisional_minutes: number;
+  reserve: { opening: number; drawn_by_other_incidents: number; available: number };
+  waterfall: Waterfall;
+}
+
+/** GET/POST /api/incidents/{code}/claims/ */
+export interface ClaimsResponse {
+  status: "open" | "not_opened";
+  incident_code: string;
+  classification: Classification;
+  market_finished: boolean;
+  current_tick: number;
+  remediation: Remediation | null;
+  claims: Claim[];
+}
+
+export interface RecalibrationRow {
+  slug: string;
+  name: string;
+  controls_enabled: boolean;
+  category: string;
+  claims_total_inr: MoneyString;
+  cash_accounts: number;
+  above_cap: boolean;
+  run_id: number;
+}
+
+/** POST /api/policies/recalibrate/ */
+export interface Recalibration {
+  previous_version: string;
+  new_version: string | null;
+  active_version: string;
+  rows: RecalibrationRow[];
+  worst: RecalibrationRow;
+  multiple: number;
+  previous_reserve_inr: MoneyString;
+  target_reserve_inr: MoneyString;
+  cap_inr: MoneyString;
+  converged: boolean;
+  same_runs: boolean;
+  explanation: string;
 }
 
 export type ClaimStatus = "AUTO_APPROVED" | "PENDING" | "APPROVED" | "REJECTED" | "PAID";
@@ -650,7 +739,7 @@ export interface IncidentReport {
   timeline: IncidentAction[];
   comms: CommsUpdate[];
   classification: ClassificationResponse;
-  claims: PendingSection;
+  claims: ClaimsResponse;
 }
 
 /** 501 from a route whose phase has not landed. */

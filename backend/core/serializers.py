@@ -577,3 +577,86 @@ class ClassificationSerializer(serializers.Serializer):
     current_tick = serializers.IntegerField()
     verdict = VerdictSerializer(allow_null=True)
     claims = ClaimSerializer(many=True)
+
+
+class TrancheSerializer(serializers.Serializer):
+    step = serializers.IntegerField()
+    source = serializers.CharField()
+    drawn = serializers.FloatField()
+    available = serializers.FloatField(allow_null=True)
+    note = serializers.CharField()
+
+
+class WaterfallSerializer(serializers.Serializer):
+    total_claims = serializers.FloatField()
+    cap = serializers.FloatField()
+    payable = serializers.FloatField()
+    pro_rata = serializers.BooleanField()
+    ratio = serializers.FloatField()
+    shortfall = serializers.FloatField()
+    reserve_opening = serializers.FloatField()
+    reserve_available = serializers.FloatField()
+    reserve_after = serializers.FloatField()
+    fee_rebates = serializers.FloatField()
+    tranches = TrancheSerializer(many=True)
+    formula = serializers.CharField()
+
+
+class ReserveStateSerializer(serializers.Serializer):
+    opening = serializers.FloatField()
+    drawn_by_other_incidents = serializers.FloatField()
+    available = serializers.FloatField()
+
+
+class RemediationSerializer(serializers.Serializer):
+    policy_version = serializers.CharField()
+    computed_at_tick = serializers.IntegerField()
+    provisional_deadline = serializers.DateTimeField()
+    provisional_minutes = serializers.IntegerField()
+    reserve = ReserveStateSerializer()
+    waterfall = WaterfallSerializer()
+
+
+class ClaimsResponseSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["open", "not_opened"])
+    incident_code = serializers.CharField()
+    classification = serializers.CharField()
+    market_finished = serializers.BooleanField()
+    current_tick = serializers.IntegerField()
+    remediation = RemediationSerializer(allow_null=True)
+    claims = ClaimSerializer(many=True)
+
+
+class OpenClaimsRequestSerializer(serializers.Serializer):
+    actor = serializers.CharField(required=False, allow_blank=True, default="")
+    rationale = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class RecalibrationRowSerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    name = serializers.CharField()
+    controls_enabled = serializers.BooleanField()
+    category = serializers.CharField()
+    claims_total_inr = serializers.CharField()
+    cash_accounts = serializers.IntegerField()
+    above_cap = serializers.BooleanField()
+    run_id = serializers.IntegerField()
+
+
+class RecalibrationSerializer(serializers.Serializer):
+    previous_version = serializers.CharField()
+    new_version = serializers.CharField(allow_null=True)
+    active_version = serializers.CharField()
+    rows = RecalibrationRowSerializer(many=True)
+    worst = RecalibrationRowSerializer()
+    multiple = serializers.FloatField()
+    previous_reserve_inr = serializers.CharField()
+    target_reserve_inr = serializers.CharField()
+    cap_inr = serializers.CharField()
+    converged = serializers.BooleanField()
+    same_runs = serializers.BooleanField()
+    explanation = serializers.CharField()
+
+
+class RecalibrateRequestSerializer(serializers.Serializer):
+    actor = serializers.CharField(required=False, allow_blank=True, default="Risk")

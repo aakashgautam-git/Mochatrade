@@ -412,17 +412,6 @@ def test_evidence_tape_has_one_row_per_source_per_tick(api, seeded) -> None:
     assert api.get(f"/api/incidents/{code}/evidence/?from=9&to=3").status_code == 400
 
 
-def test_claims_are_501_with_a_clear_detail(api, seeded) -> None:
-    code = declare(api)
-    for method, url, phase in (
-        (api.get, f"/api/incidents/{code}/claims/", 9),
-    ):
-        r = method(url)
-        assert r.status_code == 501
-        assert r.json()["phase"] == phase
-        assert f"Phase {phase}" in r.json()["detail"]
-
-
 def test_claim_decisions_work_on_existing_rows(api, seeded) -> None:
     code = declare(api)
     incident = Incident.objects.get(code=code)
@@ -465,7 +454,7 @@ def test_report_returns_what_exists_and_marks_the_rest_pending(api, seeded) -> N
     assert body["timeline"][0]["action_type"] == "DECLARE"
     assert body["classification"]["status"] == "unclassified"
     assert body["classification"]["verdict"] is None
-    assert body["claims"] == {"status": "pending", "phase": 9}
+    assert body["claims"]["status"] == "not_opened" and body["claims"]["remediation"] is None
 
 
 # --------------------------------------------------------------------------
@@ -789,3 +778,107 @@ def test_a_mid_event_verdict_is_provisional_and_rerunning_spares_decided_claims(
     claim.refresh_from_db()
     assert claim.status == "REJECTED" and claim.reason == "IC call."
     assert Incident.objects.get(code=code).actions.filter(action_type="CLASSIFY").count() == 2
+
+
+
+# --------------------------------------------------------------------------
+# Phase 9: remediation
+# --------------------------------------------------------------------------
+
+def test_opening_claims_funds_the_waterfall_and_goes_pro_rata_above_the_cap(api, seeded) -> None:
+    """The macro cascade without the controls: our market marked on the last
+    trade, the claims exceed the published cap, and the payout says so."""
+    code = declare(api, slug="macro_cascade", controls=False)
+    for ticks in (600, 120):
+        post(api, f"/api/incidents/{code}/step/", {"ticks": ticks})
+    r = post(api, f"/api/incidents/{code}/claims/", {"actor": "CEO"})
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["status"] == "open" and body["classification"] == "C"
+    plan = body["remediation"]["waterfall"]
+    policy = RiskPolicy.objects.get(is_active=True)
+    assert plan["pro_rata"] is True and plan["total_claims"] > policy.per_incident_cap_inr
+    assert plan["payable"] == pytest.approx(policy.per_incident_cap_inr)
+    assert [t["step"] for t in plan["tranches"]] == [1, 2, 3, 4, 5]
+    assert plan["tranches"][1]["drawn"] == pytest.approx(policy.per_incident_cap_inr)  # the reserve covers it
+
+    c = [x for x in body["claims"] if x["category"] == "C"]
+    assert c and all(x["status"] == "AUTO_APPROVED" for x in c)
+    paid = sum(Decimal(x["approved_inr_display"]) for x in c)
+    assert abs(paid - Decimal(str(policy.per_incident_cap_inr))) < Decimal("1")  # rounding only
+    for x in c:
+        remedy = x["evidence"]["remedy"]
+        assert remedy["pro_rata"] is True
+        assert remedy["cash_inr"] + remedy["make_good_inr"] == pytest.approx(remedy["make_whole"], abs=0.01)
+        assert Decimal(x["provisional_credit_inr"]) == Decimal(x["approved_inr_display"])
+    assert all(x["status"] == "REJECTED" for x in body["claims"] if x["category"] in {"A", "F"})
+
+    incident = Incident.objects.get(code=code)
+    assert incident.status == "REMEDIATING"
+    assert float(incident.aggregate_exposure_inr) == pytest.approx(plan["total_claims"], abs=0.01)
+    assert incident.actions.filter(action_type="OPEN_CLAIMS").get().params["pro_rata"] is True
+    report = api.get(f"/api/incidents/{code}/report/").json()
+    assert report["claims"]["remediation"]["waterfall"]["pro_rata"] is True
+
+
+def test_a_human_decision_survives_reopening_and_a_rejection_draws_nothing(api, seeded) -> None:
+    code = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 600})
+    first = post(api, f"/api/incidents/{code}/claims/").json()
+    d = [x for x in first["claims"] if x["category"] == "D" and Decimal(x["claimed_inr_display"]) > 0]
+    assert d and first["remediation"]["waterfall"]["pro_rata"] is False
+    target = d[0]
+    post(api, f"/api/incidents/{code}/claims/{target['id']}/decide/", {"decision": "REJECTED", "reason": "Duplicate account."})
+    again = post(api, f"/api/incidents/{code}/claims/").json()
+    kept = next(x for x in again["claims"] if x["id"] == target["id"])
+    assert kept["status"] == "REJECTED" and kept["reason"] == "Duplicate account."
+    total_first = first["remediation"]["waterfall"]["total_claims"]
+    total_again = again["remediation"]["waterfall"]["total_claims"]
+    assert total_again == pytest.approx(total_first - float(target["claimed_inr_display"]), abs=0.02)
+
+
+def test_a_second_incident_sees_what_the_first_drew_from_the_reserve(api, seeded) -> None:
+    first = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{first}/step/", {"ticks": 600})
+    drawn = post(api, f"/api/incidents/{first}/claims/").json()["remediation"]["waterfall"]["tranches"][1]["drawn"]
+    assert drawn > 0
+    second = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{second}/step/", {"ticks": 600})
+    reserve = post(api, f"/api/incidents/{second}/claims/").json()["remediation"]["reserve"]
+    assert reserve["drawn_by_other_incidents"] == pytest.approx(drawn, abs=0.01)
+    assert reserve["available"] == pytest.approx(reserve["opening"] - drawn, abs=0.01)
+
+
+def test_the_reserve_is_not_part_of_the_run_cache_key_but_the_cap_is(seeded) -> None:
+    params = RiskPolicy.objects.get(is_active=True).to_params()
+    assert runner.fingerprint(params.evolve(incident_reserve_opening_inr=9e7)) == runner.fingerprint(params)
+    assert runner.fingerprint(params.evolve(version="v9")) == runner.fingerprint(params)
+    assert runner.fingerprint(params.evolve(per_incident_cap_inr=9e7)) != runner.fingerprint(params)
+
+
+def test_recalibrate_from_simulation_resolves_the_circularity_in_one_step(api, seeded) -> None:
+    """Two scenarios keep the test quick; the command runs all of them."""
+    from core.models import Scenario
+
+    Scenario.objects.exclude(slug__in=["upi_settlement_delay", "long_tail_manipulation"]).delete()
+    v1 = RiskPolicy.objects.get(is_active=True)
+    r = post(api, "/api/policies/recalibrate/", {"actor": "CFO"})
+    assert r.status_code == 201, r.content
+    body = r.json()
+    assert len(body["rows"]) == 4 and body["previous_version"] == v1.version
+    worst = max(Decimal(x["claims_total_inr"]) for x in body["rows"])
+    assert Decimal(body["worst"]["claims_total_inr"]) == worst
+    assert Decimal(body["target_reserve_inr"]) == (worst * 2).quantize(Decimal("0.01"))
+    assert body["same_runs"] is True and body["converged"] is False
+
+    v2 = RiskPolicy.objects.get(is_active=True)
+    assert v2.version == body["new_version"] != v1.version
+    assert v2.incident_reserve_opening_inr == pytest.approx(float(worst * 2), abs=0.01)
+    assert v2.per_incident_cap_inr == v1.per_incident_cap_inr  # the cap is never raised
+    assert v2.to_params().evolve(version=v1.version, incident_reserve_opening_inr=v1.incident_reserve_opening_inr) == v1.to_params()
+    assert "Recalibrated from simulation" in v2.notes
+
+    again = post(api, "/api/policies/recalibrate/", {"actor": "CFO"})
+    assert again.status_code == 200
+    assert again.json()["converged"] is True and again.json()["new_version"] is None
+    assert RiskPolicy.objects.count() == 2

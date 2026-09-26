@@ -38,7 +38,19 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > criteria, the persisted per-source oracle tape and the book at its decisive
 > fill. Classification rules: see `riskengine/classifier.py`.
 >
-> **NEXT: PHASE 9 — Remediation.**
+> **PHASE 9 — REMEDIATION (complete).** Every classified account's claim is
+> sized by its class's published formula and the total is funded through the
+> research's waterfall, in order, up to the per-incident cap: recovery, the
+> Incident Reserve, the treasury, E&O; beyond the cap every eligible claim is
+> paid the same fraction in cash and the rest as a non-cash make-good,
+> announced as pro-rata. Clear-cut C/D/E claims are auto-approved with
+> provisional credit inside the 60-minute speed clause; G waits for the IC.
+> "Recalibrate from simulation" sizes the reserve at 2x the worst modelled
+> loss across all twelve seeded runs and writes a new policy version; the cap
+> is never touched and stays below the macro cascade's uncontrolled exposure,
+> so the pro-rata path is live in the demo.
+>
+> **NEXT: PHASE 10 — Comms.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -64,9 +76,9 @@ trustworthy engine more than it needs a database.
 | 5.5 | Engine fix — velocity cooldown, reopening auction, Phase 6 data | Done |
 | 6 | Simulator surface | Done |
 | 7 | War room | Done |
-| 8 | Forensics | **Done** |
-| 9 | Remediation — claims, make-whole, pro-rata cap overflow | **Next** |
-| 10 | Comms | Not started |
+| 8 | Forensics | Done |
+| 9 | Remediation — claims, make-whole, pro-rata cap overflow | **Done** |
+| 10 | Comms | **Next** |
 | 11 | Incident report | Not started |
 | 12 | Seed data + polish | Not started |
 

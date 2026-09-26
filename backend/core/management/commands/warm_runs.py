@@ -1,4 +1,5 @@
-"""Pre-execute every scenario in both control modes against the active policy.
+"""Pre-execute every scenario in both control modes against the active policy,
+and model what each run would owe, so Recalibrate reads rather than re-runs.
 
 A judge clicking through six scenarios should read from the database, not wait
 for twelve simulations. Idempotent: a run already cached for the current policy
@@ -32,6 +33,7 @@ class Command(BaseCommand):
             for enabled in (False, True):
                 t0 = time.perf_counter()
                 run, ran = runner.get_or_run(row, controls_enabled=enabled, policy=policy)
+                runner.modelled_claims(run)
                 ms = (time.perf_counter() - t0) * 1000
                 executed += ran
                 cached += not ran

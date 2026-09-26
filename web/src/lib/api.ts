@@ -2,6 +2,10 @@
 import type {
   ActionRequest,
   ActionResponse,
+  Claim,
+  ClaimDecisionRequest,
+  ClaimsResponse,
+  Recalibration,
   ClassificationResponse,
   ClassifyRequest,
   EvidenceResponse,
@@ -102,3 +106,10 @@ export const classifyIncident = (code: string, body: ClassifyRequest = {}) =>
   post<ClassificationResponse>(`/api/incidents/${code}/classify/`, body);
 export const fetchEvidence = (code: string, from: number, to: number) =>
   get<EvidenceResponse>(`/api/incidents/${code}/evidence/?from=${from}&to=${to}`);
+
+export const fetchClaims = (code: string) => get<ClaimsResponse>(`/api/incidents/${code}/claims/`);
+export const openClaims = (code: string, body: { actor?: string; rationale?: string } = {}) =>
+  post<ClaimsResponse>(`/api/incidents/${code}/claims/`, body);
+export const decideClaim = (code: string, id: number, body: ClaimDecisionRequest) =>
+  post<Claim>(`/api/incidents/${code}/claims/${id}/decide/`, body);
+export const recalibrateReserve = (actor = "Risk") => post<Recalibration>("/api/policies/recalibrate/", { actor });

@@ -41,7 +41,6 @@ export const NAV: NavSection[] = [
     path: "/remediation",
     label: "Remediation",
     icon: HandCoins,
-    pending: { phase: 9, summary: "Counterfactual equity per account, provisional credit inside 60 minutes, and the pro-rata path when a claim set exceeds the published cap." },
   },
   {
     path: "/comms",

@@ -136,6 +136,28 @@ def clock(tick: int) -> str:
     return f"T+{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+def inr_text(value: float) -> str:
+    """Money in a sentence a user reads: crore and lakh, Indian digit grouping,
+    never millions."""
+    v = abs(value)
+    sign = "-" if value < 0 and v >= 0.5 else ""
+    if v >= 1e7:
+        return f"{sign}₹{v / 1e7:.2f} Cr"
+    if v >= 1e5:
+        return f"{sign}₹{v / 1e5:.2f} L"
+    digits = f"{v:.0f}"
+    if len(digits) > 3:
+        head, tail = digits[:-3], digits[-3:]
+        groups: list[str] = []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            groups.insert(0, head)
+        digits = ",".join([*groups, tail])
+    return f"{sign}₹{digits}"
+
+
 def _bps(price: float | None, reference: float | None) -> float:
     if not price or not reference:
         return 0.0
@@ -581,7 +603,7 @@ def _classify_account(
         category = "E"
         settles = "has not settled" if a.upi_settles_tick is None else f"settled at {clock(a.upi_settles_tick)}"
         reason = (
-            f"UPI deposit of Rs {a.upi_deposit_inr:,.0f} sent at {clock(a.upi_initiated_tick)} "
+            f"UPI deposit of {inr_text(a.upi_deposit_inr)} sent at {clock(a.upi_initiated_tick)} "
             f"{settles}. Force-closed at {clock(first)}: after the money left the user's bank, "
             f"before it reached their margin."
         )

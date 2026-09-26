@@ -10,6 +10,7 @@ A user mistake is never a 500.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
@@ -40,6 +41,7 @@ from .models import (
 from .serializers import (
     ActionRequestSerializer,
     ClaimDecisionSerializer,
+    ClaimsResponseSerializer,
     ClassificationSerializer,
     ClassifyRequestSerializer,
     ClockRequestSerializer,
@@ -52,7 +54,10 @@ from .serializers import (
     IncidentSerializer,
     IncidentStateSerializer,
     InstrumentSerializer,
+    OpenClaimsRequestSerializer,
     PriceObservationSerializer,
+    RecalibrateRequestSerializer,
+    RecalibrationSerializer,
     PublicStatusUpdateSerializer,
     RiskPolicySerializer,
     RunRequestSerializer,
@@ -557,25 +562,6 @@ class IncidentTicksView(APIView):
             return Response({"from_tick": int(since), "ticks": TickSerializer(frames, many=True).data})
 
 
-class NotYetImplemented(APIView):
-    """A route that exists so its phase only has to fill in the body."""
-
-    phase: int = 0
-    feature: str = ""
-
-    def _501(self) -> Response:
-        return Response(
-            {
-                "detail": (
-                    f"{self.feature} lands in Phase {self.phase}. The route, "
-                    f"serializer and test exist now; the engine logic does not yet."
-                ),
-                "phase": self.phase,
-            },
-            status=status.HTTP_501_NOT_IMPLEMENTED,
-        )
-
-
 def _classification_payload(incident: Incident, engine) -> dict[str, Any]:
     detail = incident.classification_detail or None
     claims = incident.claims.select_related("account").order_by("account__liquidated_at_tick", "account__handle")
@@ -625,12 +611,72 @@ class IncidentClassifyView(APIView):
             return Response(_classification_payload(incident, engine))
 
 
-class IncidentClaimsView(NotYetImplemented):
-    phase, feature = 9, "Computed claims with counterfactual equity"
+def _claims_payload(incident: Incident, engine) -> dict[str, Any]:
+    detail = incident.remediation_detail or None
+    claims = incident.claims.select_related("account").order_by("-claimed_inr", "account__handle")
+    return ClaimsResponseSerializer({
+        "status": "open" if detail else "not_opened",
+        "incident_code": incident.code,
+        "classification": incident.classification,
+        "market_finished": engine.finished,
+        "current_tick": engine.tick,
+        "remediation": detail,
+        "claims": list(claims),
+    }).data
+
+
+class IncidentClaimsView(APIView):
+    """GET/POST /api/incidents/{code}/claims/ -- make-whole and the waterfall.
+
+    POST sizes every classified account's claim by the published formula for
+    its class, funds the total through the waterfall up to the per-incident
+    cap, and pushes provisional credit for clear-cut C/D/E claims. Above the
+    cap every eligible claim is paid the same fraction and the rest becomes a
+    non-cash make-good, announced as pro-rata. GET returns what was opened.
+    """
 
     def get(self, request: Request, code: str) -> Response:
-        _incident(code)
-        return self._501()
+        with runner.lock_for(code):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            return Response(_claims_payload(incident, engine))
+
+    def post(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            incident = _incident(code)
+            if incident.status == IncidentStatus.RESOLVED:
+                return _bad("This incident is resolved; its claims are part of the record.")
+            body = OpenClaimsRequestSerializer(data=request.data)
+            body.is_valid(raise_exception=True)
+            engine = runner.live_engine(incident)
+            if not engine.frames:
+                return _bad("Nothing to remediate yet: the market has not started.")
+            runner.open_claims(
+                incident,
+                engine,
+                actor=body.validated_data["actor"] or incident.incident_commander or "IC",
+                rationale=body.validated_data["rationale"],
+            )
+            incident.refresh_from_db()
+            return Response(_claims_payload(incident, engine))
+
+
+class PolicyRecalibrateView(APIView):
+    """POST /api/policies/recalibrate/ -- 'Recalibrate from simulation'.
+
+    Sizes the Incident Reserve at the policy's multiple of the worst modelled
+    loss across every seeded scenario, both control states, and writes a new
+    RiskPolicy version with that reserve. The per-incident cap is never
+    touched: it is a published promise, and it stays below the headline
+    exposure on purpose.
+    """
+
+    def post(self, request: Request) -> Response:
+        body = RecalibrateRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        result = runner.recalibrate_reserve(actor=body.validated_data["actor"] or "Risk")
+        code = status.HTTP_201_CREATED if result["new_version"] else status.HTTP_200_OK
+        return Response(RecalibrationSerializer(result).data, status=code)
 
 
 class ClaimDecideView(APIView):
@@ -656,12 +702,19 @@ class ClaimDecideView(APIView):
 
         claim.status = data["decision"]
         if data["decision"] == ClaimStatus.APPROVED:
-            claim.approved_inr = (
-                data["approved_inr"] if data.get("approved_inr") is not None else claim.claimed_inr
+            # Default to what the waterfall can pay: above the cap that is the
+            # pro-rata cash share, never the full claim.
+            remedy = (claim.evidence or {}).get("remedy") or {}
+            default = (
+                Decimal(str(remedy["cash_inr"])).quantize(Decimal("0.01"))
+                if remedy.get("cash_inr") is not None else claim.claimed_inr
             )
+            claim.approved_inr = data["approved_inr"] if data.get("approved_inr") is not None else default
         if data["decision"] == ClaimStatus.REJECTED:
             claim.approved_inr = 0
-        claim.reason = data["reason"]
+            claim.provisional_credit_inr = 0
+        if data["reason"].strip():
+            claim.reason = data["reason"]
         claim.decided_by = data["decided_by"]
         claim.decided_at = timezone.now()
         claim.save()
@@ -760,9 +813,9 @@ class IncidentCommsView(APIView):
 class IncidentReportView(APIView):
     """GET /api/incidents/{code}/report/ -- the RCA payload.
 
-    Everything that exists is reported now. Claims are marked pending until
-    Phase 9 computes them, rather than failing the whole report because one
-    section is not built.
+    Everything the incident has produced so far: the timeline, the comms, the
+    classification with its working, and the claims with the waterfall. A
+    section that has not been run yet says so instead of failing the report.
     """
 
     def get(self, request: Request, code: str) -> Response:
@@ -785,7 +838,7 @@ class IncidentReportView(APIView):
                     ).data,
                     "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
                     "classification": _classification_payload(incident, engine),
-                    "claims": {"status": "pending", "phase": 9},
+                    "claims": _claims_payload(incident, engine),
                 }
             )
 
