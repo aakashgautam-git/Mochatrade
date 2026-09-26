@@ -613,3 +613,110 @@ def test_stepped_runs_extend_fills_and_depth_without_duplicates(api, seeded) -> 
     run.refresh_from_db()
     fills = sum(len(f["liquidations"]) for f in run.tick_data)
     assert LiquidationRecord.objects.filter(run=run).count() == fills
+
+
+# --------------------------------------------------------------------------
+# Phase 7: war room
+# --------------------------------------------------------------------------
+
+def test_state_carries_triage_actions_and_the_drill_clock(api, seeded) -> None:
+    code = declare(api)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 30})
+    state = api.get(f"/api/incidents/{code}/state/").json()
+    assert [l["tier"] for l in state["triage"]] == ["L3", "L2", "L1"]
+    assert all(l["status"] in {"ok", "warn", "fail"} for l in state["triage"])
+    assert state["actions"][0]["action_type"] == "DECLARE"
+    assert state["drill_clock_s"] == 30 and state["drill_total_s"] == 3600
+    assert state["scenario"]["n_ticks"] == 720
+
+
+def test_triage_blames_the_broker_during_our_own_outage(api, seeded) -> None:
+    """broker_outage takes the app and API down from tick 120 to 480."""
+    code = declare(api, slug="broker_outage", controls=True)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 200})
+    broker = next(l for l in api.get(f"/api/incidents/{code}/state/").json()["triage"] if l["layer"] == "broker")
+    assert broker["status"] == "fail"
+    assert "most likely" in broker["headline"]
+
+
+def test_protect_switch_is_a_real_engine_action(api, seeded) -> None:
+    control, treated = declare(api), declare(api)
+    for code in (control, treated):
+        post(api, f"/api/incidents/{code}/step/", {"ticks": 70})
+    r = post(api, f"/api/incidents/{treated}/action/", {"action_type": "PROTECT_SWITCH", "rationale": "T+2 contain."})
+    assert r.json()["affects_engine"] is True
+    a = post(api, f"/api/incidents/{control}/step/", {"ticks": 200}).json()["snapshots"][-1]
+    b = post(api, f"/api/incidents/{treated}/step/", {"ticks": 200}).json()["snapshots"][-1]
+    assert b["reduce_only"] is True
+    assert b["cum_liquidated_accounts"] < a["cum_liquidated_accounts"]
+
+
+def test_the_clock_runs_forward_only_and_only_after_the_market_event(api, seeded) -> None:
+    code = declare(api, slug="oracle_defect_hip3")
+    assert post(api, f"/api/incidents/{code}/clock/", {"to_seconds": 900}).status_code == 400
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 600})
+    ok = post(api, f"/api/incidents/{code}/clock/", {"to_seconds": 900})
+    assert ok.status_code == 200 and ok.json()["drill_clock_s"] == 900
+    assert post(api, f"/api/incidents/{code}/clock/", {"to_seconds": 600}).status_code == 400
+    assert post(api, f"/api/incidents/{code}/clock/", {"to_seconds": 4000}).status_code == 400
+
+
+def test_after_the_market_event_only_post_market_decisions_apply(api, seeded) -> None:
+    code = declare(api, slug="oracle_defect_hip3")
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 600})
+    post(api, f"/api/incidents/{code}/clock/", {"to_seconds": 1800})
+    refused = post(api, f"/api/incidents/{code}/action/", {"action_type": "LIQ_THROTTLE", "rationale": "x"})
+    assert refused.status_code == 400 and "no longer changes anything" in refused.json()["detail"]
+    logged = post(api, f"/api/incidents/{code}/action/", {"action_type": "CLASSIFY", "rationale": "Class C."})
+    assert logged.status_code == 201
+    assert logged.json()["applies_at_tick"] == 1800
+    assert Incident.objects.get(code=code).status == "DIAGNOSED"
+
+
+def test_a_resolved_incident_closes_its_log(api, seeded) -> None:
+    code = declare(api)
+    post(api, f"/api/incidents/{code}/action/", {"action_type": "RESOLVE", "rationale": "Handover."})
+    assert post(api, f"/api/incidents/{code}/action/", {"action_type": "CLASSIFY"}).status_code == 400
+
+
+def test_incidents_can_be_listed_and_their_ticks_fetched(api, seeded) -> None:
+    code = declare(api)
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 25})
+    assert api.get("/api/incidents/").json()[0]["code"] == code
+    ticks = api.get(f"/api/incidents/{code}/ticks/?since=10").json()
+    assert ticks["from_tick"] == 10 and [t["tick"] for t in ticks["ticks"]] == list(range(10, 25))
+    assert api.get(f"/api/incidents/{code}/ticks/?since=x").status_code == 400
+
+
+def test_live_engine_work_holds_the_incident_lock(api, seeded, monkeypatch) -> None:
+    """The dev server is threaded. An action that reads the tick while a step
+    is advancing the same engine used to be refused as 'in the past' (a 400 on
+    the Protect Switch click). Every touch of a live engine must hold the
+    incident's lock; another thread must not be able to take it meanwhile."""
+    import threading
+
+    from riskengine.engine import Engine
+
+    code = declare(api)
+    free_while_working: list[bool] = []
+
+    def probe() -> None:
+        lock = runner.lock_for(code)
+        got = lock.acquire(blocking=False)
+        if got:
+            lock.release()
+        free_while_working.append(got)
+
+    def spy(real):
+        def wrapped(self, *args, **kwargs):
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+            return real(self, *args, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(Engine, "step", spy(Engine.step))
+    monkeypatch.setattr(Engine, "queue_action", spy(Engine.queue_action))
+    post(api, f"/api/incidents/{code}/step/", {"ticks": 3})
+    post(api, f"/api/incidents/{code}/action/", {"action_type": "PROTECT_SWITCH", "rationale": "x"})
+    assert free_while_working and not any(free_while_working)

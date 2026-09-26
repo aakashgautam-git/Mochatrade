@@ -1,19 +1,50 @@
 /** REST client. Plain fetch against /api, proxied to Django by Vite in dev. */
-import type { Comparison, CompareResponse, MoneyString, RiskPolicy, ScenarioListItem } from "./types";
+import type {
+  ActionRequest,
+  ActionResponse,
+  Comparison,
+  CompareResponse,
+  CommsCreateRequest,
+  CommsUpdate,
+  DeclareIncidentRequest,
+  Incident,
+  IncidentState,
+  MoneyString,
+  RiskPolicy,
+  ScenarioListItem,
+  StepResponse,
+  TicksResponse,
+} from "./types";
 
-async function get<T>(path: string): Promise<T> {
+export async function get<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) throw new Error(`${path} -> ${response.status}`);
   return (await response.json()) as T;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+/** An API error carrying the server's human-readable `detail`. */
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+export async function post<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(`${path} -> ${response.status}`);
+  if (!response.ok) {
+    let detail = `${path} -> ${response.status}`;
+    try {
+      const data = (await response.json()) as { detail?: string };
+      if (data.detail) detail = data.detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(response.status, detail);
+  }
   return (await response.json()) as T;
 }
 
@@ -45,3 +76,19 @@ export function rupees(value: number): string {
   if (abs >= 1_00_000) return `₹${(value / 1_00_000).toFixed(1)} L`;
   return `₹${Math.round(value).toLocaleString("en-IN")}`;
 }
+
+// ---------------------------------------------------------------------------
+// Incidents: the war room
+// ---------------------------------------------------------------------------
+
+export const listIncidents = () => get<Incident[]>("/api/incidents/");
+export const declareIncident = (body: DeclareIncidentRequest) => post<IncidentState>("/api/incidents/", body);
+export const incidentState = (code: string) => get<IncidentState>(`/api/incidents/${code}/state/`);
+export const incidentTicks = (code: string, since = 0) => get<TicksResponse>(`/api/incidents/${code}/ticks/?since=${since}`);
+export const stepIncident = (code: string, ticks: number) => post<StepResponse>(`/api/incidents/${code}/step/`, { ticks });
+export const advanceClock = (code: string, toSeconds: number) =>
+  post<IncidentState>(`/api/incidents/${code}/clock/`, { to_seconds: toSeconds });
+export const incidentAction = (code: string, body: ActionRequest) =>
+  post<ActionResponse>(`/api/incidents/${code}/action/`, body);
+export const publishUpdate = (code: string, body: CommsCreateRequest) =>
+  post<CommsUpdate>(`/api/incidents/${code}/comms/`, body);

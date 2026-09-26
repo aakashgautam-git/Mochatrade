@@ -1,4 +1,4 @@
-import { CircleCheck, CirclePause, OctagonX, ShieldAlert, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CircleCheck, CirclePause, Hourglass, OctagonX, ShieldAlert, TriangleAlert, type LucideIcon } from "lucide-react";
 
 import { cn } from "../components/ui/cn";
 import type { SystemState } from "./store";
@@ -34,6 +34,13 @@ export const LOOK: Record<SystemState, Look> = {
     pill: "border-warn-edge bg-warn-soft text-warn-fg",
     strip: "bg-warn",
     meaning: "Risk-increasing orders rejected. Positions can still close.",
+  },
+  TRADING_PAUSED: {
+    label: "Trading paused",
+    icon: Hourglass,
+    pill: "border-accent-edge bg-accent-soft text-accent-fg",
+    strip: "bg-accent",
+    meaning: "Matching paused by the velocity guard or the circuit breaker; it reopens through a call auction.",
   },
   LIQ_PAUSED: {
     label: "Liq paused",

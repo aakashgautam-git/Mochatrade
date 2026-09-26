@@ -4,8 +4,11 @@ import { useNow } from "../../hooks/useNow";
 import { cn } from "./cn";
 
 interface CountdownProps {
-  /** Epoch milliseconds. */
-  deadline: number;
+  /** Epoch milliseconds. Ignored when `remaining` is given. */
+  deadline?: number;
+  /** Seconds left on a clock other than the wall clock -- e.g. the war room's
+   * simulated drill clock. When set, the wall clock is not read at all. */
+  remaining?: number | undefined;
   /** Seconds remaining at which it turns warn. */
   warnAt: number;
   /** Seconds remaining at which it turns neg. Defaults to the deadline itself. */
@@ -33,9 +36,9 @@ const STATE = {
  * MM:SS to a deadline. Crossing a threshold changes the colour, the icon and
  * the words together. Past zero it keeps counting, as overdue time.
  */
-export function Countdown({ deadline, warnAt, negAt = 0, label, size = "md" }: CountdownProps) {
+export function Countdown({ deadline = 0, remaining: given, warnAt, negAt = 0, label, size = "md" }: CountdownProps) {
   const now = useNow(1000);
-  const remaining = Math.ceil((deadline - now) / 1000);
+  const remaining = given ?? Math.ceil((deadline - now) / 1000);
   const phase = remaining <= negAt ? "neg" : remaining <= warnAt ? "warn" : "ok";
   const s = STATE[phase];
   const overdue = remaining < 0;

@@ -23,6 +23,7 @@ from rest_framework.views import APIView
 from riskengine.controls import OperatorAction
 
 from . import runner
+from .triage import triage
 from .models import (
     ActionType,
     Claim,
@@ -38,6 +39,7 @@ from .models import (
 from .serializers import (
     ActionRequestSerializer,
     ClaimDecisionSerializer,
+    ClockRequestSerializer,
     ClaimSerializer,
     CommsCreateSerializer,
     CommsUpdateSerializer,
@@ -293,16 +295,49 @@ def _incident(code: str) -> Incident:
     )
 
 
+#: Decisions that still mean something once the market event has ended. The
+#: live controls (pauses, throttle, leverage, halt) do not: there is no market
+#: left for them to change.
+POST_MARKET_ACTIONS = {
+    ActionType.SNAPSHOT_EVIDENCE,
+    ActionType.PUBLISH_UPDATE,
+    ActionType.CLASSIFY,
+    ActionType.QUANTIFY,
+    ActionType.OPEN_CLAIMS,
+    ActionType.PROVISIONAL_CREDIT,
+    ActionType.STAGED_REOPEN,
+    ActionType.RESOLVE,
+}
+
+STATUS_AFTER = {
+    ActionType.CLASSIFY: IncidentStatus.DIAGNOSED,
+    ActionType.QUANTIFY: IncidentStatus.REMEDIATING,
+    ActionType.OPEN_CLAIMS: IncidentStatus.REMEDIATING,
+    ActionType.PROVISIONAL_CREDIT: IncidentStatus.REMEDIATING,
+}
+
+
 def _state_payload(incident: Incident) -> dict:
     engine = runner.live_engine(incident)
     frame = engine.frames[-1].as_dict() if engine.frames else None
     flags = engine.flags
+    scenario = engine.scenario
     return IncidentStateSerializer(
         {
             "incident": incident,
+            "scenario": {
+                "slug": incident.run.scenario.slug if incident.run else scenario.key,
+                "name": scenario.title,
+                "instrument": scenario.instrument,
+                "ist_label": scenario.ist_label,
+                "layer": scenario.layer.value,
+                "n_ticks": scenario.n_ticks,
+            },
             "elapsed_seconds": runner.elapsed_seconds(incident),
+            "drill_clock_s": runner.drill_clock(incident, engine),
+            "drill_total_s": runner.DRILL_SECONDS,
             "current_tick": engine.tick,
-            "total_ticks": engine.scenario.n_ticks,
+            "total_ticks": scenario.n_ticks,
             "finished": engine.finished,
             "snapshot": frame,
             "active_controls": engine.controls.as_dict(),
@@ -314,12 +349,19 @@ def _state_payload(incident: Incident) -> dict:
                 "stage": flags.stage.value,
                 "operator_throttle": engine.operator_throttle,
             },
+            "triage": triage(engine),
+            "actions": incident.actions.order_by("tick", "id"),
         }
     ).data
 
 
 class IncidentCreateView(APIView):
-    """POST /api/incidents/ -- declare, open the record, start a stepped run."""
+    """GET lists recent incidents so a drill can be resumed; POST declares one,
+    opens the record and starts a stepped run."""
+
+    def get(self, request: Request) -> Response:
+        qs = Incident.objects.select_related("run", "run__scenario").order_by("-declared_at")[:20]
+        return Response(IncidentSerializer(qs, many=True).data)
 
     def post(self, request: Request) -> Response:
         req = DeclareIncidentSerializer(data=request.data)
@@ -355,36 +397,41 @@ class IncidentCreateView(APIView):
 
 class IncidentStateView(APIView):
     def get(self, request: Request, code: str) -> Response:
-        return Response(_state_payload(_incident(code)))
+        with runner.lock_for(code):
+            return Response(_state_payload(_incident(code)))
 
 
 class IncidentStepView(APIView):
     def post(self, request: Request, code: str) -> Response:
-        req = StepRequestSerializer(data=request.data)
-        if not req.is_valid():
-            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+        with runner.lock_for(code):
+            req = StepRequestSerializer(data=request.data)
+            if not req.is_valid():
+                return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        incident = _incident(code)
-        engine = runner.live_engine(incident)
-        if engine.finished:
-            return _bad(f"{code} has already run to completion; there are no ticks left.")
-
-        before = engine.tick
-        new = []
-        for _ in range(req.validated_data["ticks"]):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
             if engine.finished:
-                break
-            new.append(engine.step().as_dict())
-        runner.persist_live(incident, engine)
+                return _bad(f"{code} has already run to completion; there are no ticks left.")
 
-        return Response(
-            {
-                "from_tick": before,
-                "to_tick": engine.tick,
-                "finished": engine.finished,
-                "snapshots": TickSerializer(new, many=True).data,
-            }
-        )
+            before = engine.tick
+            new = []
+            for _ in range(req.validated_data["ticks"]):
+                if engine.finished:
+                    break
+                new.append(engine.step().as_dict())
+            runner.persist_live(incident, engine)
+            if engine.tick > incident.drill_clock_s:
+                incident.drill_clock_s = engine.tick
+                incident.save(update_fields=["drill_clock_s"])
+
+            return Response(
+                {
+                    "from_tick": before,
+                    "to_tick": engine.tick,
+                    "finished": engine.finished,
+                    "snapshots": TickSerializer(new, many=True).data,
+                }
+            )
 
 
 class IncidentActionView(APIView):
@@ -395,66 +442,116 @@ class IncidentActionView(APIView):
     """
 
     def post(self, request: Request, code: str) -> Response:
-        req = ActionRequestSerializer(data=request.data)
-        if not req.is_valid():
-            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
-        data = req.validated_data
+        with runner.lock_for(code):
+            req = ActionRequestSerializer(data=request.data)
+            if not req.is_valid():
+                return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+            data = req.validated_data
 
-        valid = {c for c, _ in ActionType.choices}
-        if data["action_type"] not in valid:
-            return _bad(
-                f"Unknown action_type {data['action_type']!r}. "
-                f"Valid: {', '.join(sorted(valid))}."
-            )
-
-        incident = _incident(code)
-        engine = runner.live_engine(incident)
-        if engine.finished:
-            return _bad(f"{code} has run to completion; actions can no longer change it.")
-
-        tick = engine.tick
-        with transaction.atomic():
-            logged = IncidentAction.objects.create(
-                incident=incident,
-                tick=tick,
-                actor=data["actor"],
-                action_type=data["action_type"],
-                params=data["params"],
-                rationale=data["rationale"],
-                reversible=data["action_type"] not in runner.IRREVERSIBLE,
-            )
-            kind = runner.ENGINE_ACTIONS.get(data["action_type"])
-            if kind is not None:
-                engine.queue_action(
-                    OperatorAction(
-                        tick=tick,
-                        kind=kind,
-                        value=data["params"].get("value"),
-                        note=data["params"].get("note", ""),
-                    )
+            valid = {c for c, _ in ActionType.choices}
+            if data["action_type"] not in valid:
+                return _bad(
+                    f"Unknown action_type {data['action_type']!r}. "
+                    f"Valid: {', '.join(sorted(valid))}."
                 )
-            if data["action_type"] == ActionType.RESOLVE:
-                incident.status = IncidentStatus.RESOLVED
-                incident.resolved_at = timezone.now()
-                incident.save(update_fields=["status", "resolved_at"])
-            elif incident.status == IncidentStatus.DECLARED and kind is not None:
-                incident.status = IncidentStatus.CONTAINED
-                incident.save(update_fields=["status"])
 
-        return Response(
-            {
-                "action": IncidentActionSerializer(logged).data,
-                "affects_engine": kind is not None,
-                "applies_at_tick": tick,
-                "note": (
-                    "Applied to the live engine; takes effect on the next step."
-                    if kind is not None
-                    else "Recorded in the audit log. This decision is about the "
-                    "incident, not an instruction to the market."
-                ),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            if incident.status == IncidentStatus.RESOLVED:
+                return _bad(f"{code} is resolved; the log is closed.")
+            if engine.finished and data["action_type"] not in POST_MARKET_ACTIONS:
+                return _bad(
+                    f"The market event in {code} has ended, so {data['action_type']} "
+                    f"no longer changes anything. Post-market decisions still apply: "
+                    f"{', '.join(sorted(POST_MARKET_ACTIONS))}."
+                )
+
+            live = not engine.finished
+            tick = engine.tick if live else runner.drill_clock(incident, engine)
+            with transaction.atomic():
+                logged = IncidentAction.objects.create(
+                    incident=incident,
+                    tick=tick,
+                    actor=data["actor"],
+                    action_type=data["action_type"],
+                    params=data["params"],
+                    rationale=data["rationale"],
+                    reversible=data["action_type"] not in runner.IRREVERSIBLE,
+                )
+                kind = runner.ENGINE_ACTIONS.get(data["action_type"]) if live else None
+                if kind is not None:
+                    engine.queue_action(
+                        OperatorAction(
+                            tick=tick,
+                            kind=kind,
+                            value=data["params"].get("value"),
+                            note=data["params"].get("note", ""),
+                        )
+                    )
+                if data["action_type"] == ActionType.RESOLVE:
+                    incident.status = IncidentStatus.RESOLVED
+                    incident.resolved_at = timezone.now()
+                    incident.save(update_fields=["status", "resolved_at"])
+                elif data["action_type"] in STATUS_AFTER:
+                    incident.status = STATUS_AFTER[data["action_type"]]
+                    incident.save(update_fields=["status"])
+                elif incident.status == IncidentStatus.DECLARED and kind is not None:
+                    incident.status = IncidentStatus.CONTAINED
+                    incident.save(update_fields=["status"])
+
+            return Response(
+                {
+                    "action": IncidentActionSerializer(logged).data,
+                    "affects_engine": kind is not None,
+                    "applies_at_tick": tick,
+                    "note": (
+                        "Applied to the live engine; takes effect on the next step."
+                        if kind is not None
+                        else "Recorded in the audit log. This decision is about the "
+                        "incident, not an instruction to the market."
+                    ),
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+
+class IncidentClockView(APIView):
+    """POST /api/incidents/{code}/clock/ -- advance the playbook clock once the
+    market event has ended. Forward only, capped at T+60."""
+
+    def post(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            req = ClockRequestSerializer(data=request.data)
+            if not req.is_valid():
+                return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            if not engine.finished:
+                return _bad(
+                    f"The market event is still running (tick {engine.tick} of "
+                    f"{engine.scenario.n_ticks}); step the engine instead."
+                )
+            target = min(req.validated_data["to_seconds"], runner.DRILL_SECONDS)
+            current = runner.drill_clock(incident, engine)
+            if target < current:
+                return _bad(f"The clock only runs forward; it is already at {current}s.")
+            incident.drill_clock_s = target
+            incident.save(update_fields=["drill_clock_s"])
+            return Response(_state_payload(incident))
+
+
+class IncidentTicksView(APIView):
+    """GET /api/incidents/{code}/ticks/?since=N -- the frames so far, for the
+    war-room chart after a reload."""
+
+    def get(self, request: Request, code: str) -> Response:
+        with runner.lock_for(code):
+            since = request.query_params.get("since", "0")
+            if not since.isdigit():
+                return _bad("`since` must be a non-negative integer tick.")
+            engine = runner.live_engine(_incident(code))
+            frames = [f.as_dict() for f in engine.frames[int(since):]]
+            return Response({"from_tick": int(since), "ticks": TickSerializer(frames, many=True).data})
 
 
 class NotYetImplemented(APIView):
@@ -536,32 +633,33 @@ class IncidentEvidenceView(APIView):
     """
 
     def get(self, request: Request, code: str) -> Response:
-        incident = _incident(code)
-        engine = runner.live_engine(incident)
-        rows = []
-        for f in engine.frames:
-            f = f.as_dict()
-            rows.append({
-                "tick": f["tick"], "source": "MOCHATRADE", "price": f["mark"],
-                "is_stale": False, "weight": 1.0, "excluded_reason": "",
-            })
-            rows.append({
-                "tick": f["tick"], "source": "COMPOSITE", "price": f["composite"],
-                "is_stale": f["composite"] is None, "weight": 1.0,
-                "excluded_reason": "" if f["composite"] else f["oracle_reason"],
-            })
-            rows.append({
-                "tick": f["tick"], "source": "REFERENCE", "price": f["reference"],
-                "is_stale": False, "weight": 1.0,
-                "excluded_reason": "reconstructed after the fact; never used for marking",
-            })
-        return Response(
-            {
-                "incident_code": code,
-                "ticks_recorded": len(engine.frames),
-                "observations": PriceObservationSerializer(rows, many=True).data,
-            }
-        )
+        with runner.lock_for(code):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            rows = []
+            for f in engine.frames:
+                f = f.as_dict()
+                rows.append({
+                    "tick": f["tick"], "source": "MOCHATRADE", "price": f["mark"],
+                    "is_stale": False, "weight": 1.0, "excluded_reason": "",
+                })
+                rows.append({
+                    "tick": f["tick"], "source": "COMPOSITE", "price": f["composite"],
+                    "is_stale": f["composite"] is None, "weight": 1.0,
+                    "excluded_reason": "" if f["composite"] else f["oracle_reason"],
+                })
+                rows.append({
+                    "tick": f["tick"], "source": "REFERENCE", "price": f["reference"],
+                    "is_stale": False, "weight": 1.0,
+                    "excluded_reason": "reconstructed after the fact; never used for marking",
+                })
+            return Response(
+                {
+                    "incident_code": code,
+                    "ticks_recorded": len(engine.frames),
+                    "observations": PriceObservationSerializer(rows, many=True).data,
+                }
+            )
 
 
 class IncidentCommsView(APIView):
@@ -570,41 +668,42 @@ class IncidentCommsView(APIView):
         return Response(CommsUpdateSerializer(incident.updates.all(), many=True).data)
 
     def post(self, request: Request, code: str) -> Response:
-        incident = _incident(code)
-        req = CommsCreateSerializer(data=request.data)
-        if not req.is_valid():
-            return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
-        data = req.validated_data
+        with runner.lock_for(code):
+            incident = _incident(code)
+            req = CommsCreateSerializer(data=request.data)
+            if not req.is_valid():
+                return Response(req.errors, status=status.HTTP_400_BAD_REQUEST)
+            data = req.validated_data
 
-        sequence = data.get("sequence") or (
-            (incident.updates.order_by("-sequence").values_list("sequence", flat=True).first() or 0)
-            + 1
-        )
-        if incident.updates.filter(sequence=sequence, channel=data["channel"]).exists():
-            return _bad(f"Update #{sequence} on {data['channel']} already exists.")
-
-        publish = data.get("is_published", True)
-        update = CommsUpdate.objects.create(
-            incident=incident,
-            sequence=sequence,
-            channel=data["channel"],
-            headline=data["headline"],
-            body=data["body"],
-            next_update_at=data.get("next_update_at"),
-            is_published=publish,
-            published_at=timezone.now() if publish else None,
-        )
-        if publish:
-            engine = runner.live_engine(incident)
-            IncidentAction.objects.create(
-                incident=incident,
-                tick=engine.tick,
-                actor=incident.comms_lead or "COMMS",
-                action_type=ActionType.PUBLISH_UPDATE,
-                params={"channel": update.channel, "sequence": update.sequence},
-                rationale=update.headline,
+            sequence = data.get("sequence") or (
+                (incident.updates.order_by("-sequence").values_list("sequence", flat=True).first() or 0)
+                + 1
             )
-        return Response(CommsUpdateSerializer(update).data, status=status.HTTP_201_CREATED)
+            if incident.updates.filter(sequence=sequence, channel=data["channel"]).exists():
+                return _bad(f"Update #{sequence} on {data['channel']} already exists.")
+
+            publish = data.get("is_published", True)
+            update = CommsUpdate.objects.create(
+                incident=incident,
+                sequence=sequence,
+                channel=data["channel"],
+                headline=data["headline"],
+                body=data["body"],
+                next_update_at=data.get("next_update_at"),
+                is_published=publish,
+                published_at=timezone.now() if publish else None,
+            )
+            if publish:
+                engine = runner.live_engine(incident)
+                IncidentAction.objects.create(
+                    incident=incident,
+                    tick=engine.tick,
+                    actor=incident.comms_lead or "COMMS",
+                    action_type=ActionType.PUBLISH_UPDATE,
+                    params={"channel": update.channel, "sequence": update.sequence},
+                    rationale=update.headline,
+                )
+            return Response(CommsUpdateSerializer(update).data, status=status.HTTP_201_CREATED)
 
 
 class IncidentReportView(APIView):
@@ -616,27 +715,28 @@ class IncidentReportView(APIView):
     """
 
     def get(self, request: Request, code: str) -> Response:
-        incident = _incident(code)
-        engine = runner.live_engine(incident)
-        summary = engine.result().summary.as_dict() if engine.frames else {}
-        return Response(
-            {
-                "incident": IncidentSerializer(incident).data,
-                "run": {
-                    "scenario_slug": incident.run.scenario.slug if incident.run else None,
-                    "policy_version": incident.run.policy.version if incident.run else None,
-                    "seed": incident.run.seed if incident.run else None,
-                    "current_tick": engine.tick,
-                    "summary": RunSummarySerializer(summary).data if summary else None,
-                },
-                "timeline": IncidentActionSerializer(
-                    incident.actions.order_by("tick", "id"), many=True
-                ).data,
-                "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
-                "classification": {"status": "pending", "phase": 8},
-                "claims": {"status": "pending", "phase": 9},
-            }
-        )
+        with runner.lock_for(code):
+            incident = _incident(code)
+            engine = runner.live_engine(incident)
+            summary = engine.result().summary.as_dict() if engine.frames else {}
+            return Response(
+                {
+                    "incident": IncidentSerializer(incident).data,
+                    "run": {
+                        "scenario_slug": incident.run.scenario.slug if incident.run else None,
+                        "policy_version": incident.run.policy.version if incident.run else None,
+                        "seed": incident.run.seed if incident.run else None,
+                        "current_tick": engine.tick,
+                        "summary": RunSummarySerializer(summary).data if summary else None,
+                    },
+                    "timeline": IncidentActionSerializer(
+                        incident.actions.order_by("tick", "id"), many=True
+                    ).data,
+                    "comms": CommsUpdateSerializer(incident.updates.all(), many=True).data,
+                    "classification": {"status": "pending", "phase": 8},
+                    "claims": {"status": "pending", "phase": 9},
+                }
+            )
 
 
 # --------------------------------------------------------------------------

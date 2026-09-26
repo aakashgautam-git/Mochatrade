@@ -18,7 +18,17 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 >
 > **PHASE 6 — SIMULATOR SURFACE (complete).** The simulator UI, playback, charts, derived metrics (ladder, spans, cascade split).
 >
-> **NEXT: PHASE 7 — War room. Await instructions.**
+> **PHASE 7 — WAR ROOM (complete).** Declare a SEV-1 against any seeded
+> scenario and run one clock from T+0 to T+60: the live engine for the market
+> event, then the drill clock for the rest of the hour. Three-layer triage
+> (Venue L3 / Market L2 / Broker L1) from live engine state, the eleven-step
+> playbook with owners and due times, role-stamped decisions with a written
+> rationale, guardrail confirms on irreversible calls, and the first public
+> updates. The incident drives the top-bar pill, including the new "Trading
+> paused" state; simulator replays never do. Every live-engine request holds a
+> per-incident lock.
+>
+> **NEXT: PHASE 8 — Forensics.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -42,9 +52,9 @@ trustworthy engine more than it needs a database.
 | 4 | REST API | Done |
 | 5 | Design system | Done |
 | 5.5 | Engine fix — velocity cooldown, reopening auction, Phase 6 data | Done |
-| 6 | Simulator surface | **Done** |
-| 7 | War room | **Next** |
-| 8 | Forensics | Not started |
+| 6 | Simulator surface | Done |
+| 7 | War room | **Done** |
+| 8 | Forensics | **Next** |
 | 9 | Remediation — claims, make-whole, pro-rata cap overflow | Not started |
 | 10 | Comms | Not started |
 | 11 | Incident report | Not started |

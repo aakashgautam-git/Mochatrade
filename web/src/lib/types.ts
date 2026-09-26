@@ -320,7 +320,7 @@ export interface CompareRequest {
 export type Classification = "UNCLASSIFIED" | "A" | "B" | "C" | "D" | "E" | "F" | "G";
 
 export type ActionType =
-  | "DECLARE" | "REDUCE_ONLY" | "PAUSE_LIQUIDATIONS" | "LIQ_THROTTLE"
+  | "DECLARE" | "PROTECT_SWITCH" | "QUANTIFY" | "REDUCE_ONLY" | "PAUSE_LIQUIDATIONS" | "LIQ_THROTTLE"
   | "LEVERAGE_CAP" | "WIDEN_BANDS" | "HALT_MARKET" | "SNAPSHOT_EVIDENCE"
   | "PUBLISH_UPDATE" | "CLASSIFY" | "OPEN_CLAIMS" | "PROVISIONAL_CREDIT"
   | "STAGED_REOPEN" | "RESOLVE";
@@ -365,16 +365,56 @@ export interface IncidentFlags {
   operator_throttle: boolean;
 }
 
-/** GET /api/incidents/{code}/state/ and POST /api/incidents/ */
+export type TriageStatus = "ok" | "warn" | "fail";
+
+export interface TriageSignal {
+  label: string;
+  value: string;
+  status: TriageStatus;
+}
+
+/** One of the three layers: L3 venue, L2 our HIP-3 market, L1 our broker stack. */
+export interface TriageLayer {
+  layer: "venue" | "market" | "broker";
+  tier: "L3" | "L2" | "L1";
+  name: string;
+  control: string;
+  status: TriageStatus;
+  headline: string;
+  signals: TriageSignal[];
+}
+
+export interface IncidentScenario {
+  slug: string;
+  name: string;
+  instrument: string;
+  ist_label: string;
+  layer: string;
+  n_ticks: number;
+}
+
+/** GET /api/incidents/{code}/state/, POST /api/incidents/ and POST .../clock/ */
 export interface IncidentState {
   incident: Incident;
+  scenario: IncidentScenario;
   elapsed_seconds: number;
+  /** The playbook clock in seconds, T+0 to T+3600. */
+  drill_clock_s: number;
+  drill_total_s: number;
   current_tick: number;
   total_ticks: number;
   finished: boolean;
   snapshot: Tick | null;
   active_controls: Record<string, boolean>;
   flags: IncidentFlags;
+  triage: TriageLayer[];
+  actions: IncidentAction[];
+}
+
+/** GET /api/incidents/{code}/ticks/ */
+export interface TicksResponse {
+  from_tick: number;
+  ticks: Tick[];
 }
 
 export interface DeclareIncidentRequest {

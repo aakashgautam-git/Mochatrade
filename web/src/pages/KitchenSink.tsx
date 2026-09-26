@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useApp, type SystemState } from "../app/store";
+import { PauseNote } from "../components/PauseNote";
 import { LOOK, SystemStatePill } from "../app/SystemStatePill";
 import {
   CascadeChart,
@@ -123,7 +124,7 @@ function Section({ id, title, description, children }: { id: string; title: stri
 
 // ---------------------------------------------------------------------------
 
-const STATES: SystemState[] = ["NORMAL", "REDUCE_ONLY", "LIQ_PAUSED", "HALTED", "DEGRADED_ORACLE"];
+const STATES: SystemState[] = ["NORMAL", "REDUCE_ONLY", "TRADING_PAUSED", "LIQ_PAUSED", "HALTED", "DEGRADED_ORACLE"];
 
 function StateSection() {
   const state = useApp((s) => s.systemState);
@@ -139,7 +140,7 @@ function StateSection() {
     >
       <Card>
         <CardBody className="pt-6">
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {STATES.map((s) => (
               <li key={s}>
                 <button
@@ -501,6 +502,7 @@ function ChartsSection() {
           </CardHeader>
           <CardBody>
             {isError ? <ChartError /> : derived ? <PriceChart data={derived.price} regions={derived.regions} bursts={derived.bursts} /> : <Skeleton className="h-72 w-full" />}
+            <div className="mt-3"><PauseNote /></div>
           </CardBody>
         </Card>
 

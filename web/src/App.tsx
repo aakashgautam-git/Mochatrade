@@ -6,6 +6,7 @@ import { KitchenSink } from "./pages/KitchenSink";
 import { LegacyDemo } from "./pages/LegacyDemo";
 import { Placeholder } from "./pages/Placeholder";
 import { Simulator } from "./pages/Simulator";
+import { WarRoom } from "./pages/WarRoom";
 
 /**
  * Routes. `/demo` is the screening-round page, standalone and unchanged: the
@@ -39,6 +40,14 @@ export function App() {
     return (
       <Shell current={section} title="Overview" isDocument={false}>
         <LegacyDemo embedded />
+      </Shell>
+    );
+  }
+
+  if (path === "/war-room") {
+    return (
+      <Shell current={section} title="War Room" isDocument={false}>
+        <WarRoom />
       </Shell>
     );
   }

@@ -362,17 +362,52 @@ class ActionRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(required=False, default="IC")
 
 
+class TriageSignalSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    value = serializers.CharField()
+    status = serializers.CharField()
+
+
+class TriageLayerSerializer(serializers.Serializer):
+    layer = serializers.CharField()
+    tier = serializers.CharField()
+    name = serializers.CharField()
+    control = serializers.CharField()
+    status = serializers.CharField()
+    headline = serializers.CharField()
+    signals = TriageSignalSerializer(many=True)
+
+
+class IncidentScenarioSerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    name = serializers.CharField()
+    instrument = serializers.CharField()
+    ist_label = serializers.CharField()
+    layer = serializers.CharField()
+    n_ticks = serializers.IntegerField()
+
+
 class IncidentStateSerializer(serializers.Serializer):
-    """Current war-room state: where the clock is and what is switched on."""
+    """Current war-room state: where the clocks are, what is switched on, which
+    layer is failing, and everything decided so far."""
 
     incident = IncidentSerializer()
+    scenario = IncidentScenarioSerializer()
     elapsed_seconds = serializers.FloatField()
+    drill_clock_s = serializers.IntegerField()
+    drill_total_s = serializers.IntegerField()
     current_tick = serializers.IntegerField()
     total_ticks = serializers.IntegerField()
     finished = serializers.BooleanField()
     snapshot = TickSerializer(allow_null=True)
     active_controls = serializers.DictField()
     flags = serializers.DictField()
+    triage = TriageLayerSerializer(many=True)
+    actions = IncidentActionSerializer(many=True)
+
+
+class ClockRequestSerializer(serializers.Serializer):
+    to_seconds = serializers.IntegerField(min_value=0, max_value=3600)
 
 
 class PriceObservationSerializer(serializers.Serializer):

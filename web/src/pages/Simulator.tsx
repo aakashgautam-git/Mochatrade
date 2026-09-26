@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Play, Pause, RotateCcw } from "lucide-react";
 
+import { PauseNote } from "../components/PauseNote";
+
 import { fetchActivePolicy, fetchCompare, fetchScenarios, parseMoney, rupees } from "../lib/api";
 import { useApp } from "../app/store";
 import { Button, Badge, Select, Slider, Stat, Timeline, EmptyState, Skeleton, Toggle } from "../components/ui";
@@ -334,6 +336,7 @@ export function Simulator() {
           <div className="rounded-card border border-line bg-surface p-4">
             <h3 className="mb-4 text-xs font-medium uppercase tracking-[0.12em] text-text-dim">Price & Control</h3>
             <PriceChart data={slicedOn.price} cursor={t} regions={on.regions} bursts={slicedOn.bursts} auctions={slicedOn.auctions} domain={domain} />
+            <div className="mt-3"><PauseNote /></div>
           </div>
 
           <div className="rounded-card border border-line bg-surface p-4">

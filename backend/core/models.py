@@ -378,6 +378,7 @@ class ActionType(models.TextChoices):
     """Everything the war room can do, in playbook order."""
 
     DECLARE = "DECLARE", "T+0 Declare — SEV-1, I am IC"
+    PROTECT_SWITCH = "PROTECT_SWITCH", "T+2 Protect Switch — reduce-only, throttle, 3x"
     REDUCE_ONLY = "REDUCE_ONLY", "T+2 Reduce-only"
     PAUSE_LIQUIDATIONS = "PAUSE_LIQUIDATIONS", "T+2 Pause liquidations (oracle suspect)"
     LIQ_THROTTLE = "LIQ_THROTTLE", "T+2 Liquidation TWAP throttle"
@@ -387,6 +388,7 @@ class ActionType(models.TextChoices):
     SNAPSHOT_EVIDENCE = "SNAPSHOT_EVIDENCE", "T+3 Preserve evidence"
     PUBLISH_UPDATE = "PUBLISH_UPDATE", "T+5 Publish update"
     CLASSIFY = "CLASSIFY", "T+15 Classify A–G"
+    QUANTIFY = "QUANTIFY", "T+15–30 Quantify the affected set"
     OPEN_CLAIMS = "OPEN_CLAIMS", "T+30 Open claims portal"
     PROVISIONAL_CREDIT = "PROVISIONAL_CREDIT", "T+30 Push provisional credit"
     STAGED_REOPEN = "STAGED_REOPEN", "T+45 Staged reopen through auction"
@@ -783,6 +785,14 @@ class Incident(models.Model):
     )
     severity = models.CharField(max_length=8, choices=Severity.choices, default=Severity.SEV1)
     declared_at = models.DateTimeField(default=timezone.now)
+    drill_clock_s = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Seconds on the playbook clock, T+0 to T+3600. The market event runs "
+            "for the scenario's 10-12 minutes, one engine tick per second; the "
+            "response -- quantify, remediate, reopen, hand over -- runs to T+60."
+        ),
+    )
     resolved_at = models.DateTimeField(null=True, blank=True)
 
     # Roles are pre-assigned in writing. At T+0 you assume them, you do not

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import asdict
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -278,11 +279,28 @@ def write_observations(run: SimRun, frames: list[dict]) -> int:
 
 _LIVE: dict[str, Engine] = {}
 
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def lock_for(code: str) -> threading.RLock:
+    """One lock per incident. The dev server is multi-threaded, and a live
+    engine is a plain in-memory object: without this, an operator decision
+    arriving while the clock is stepping read the tick, the step advanced the
+    engine, and the engine then refused an action queued in its own past -- an
+    intermittent 400 on exactly the click that matters most."""
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(code)
+        if lock is None:
+            lock = _LOCKS[code] = threading.RLock()
+        return lock
+
 #: Django action types that have a real effect on the simulation, and the
 #: engine action they map to. Everything else is recorded in the audit log but
 #: changes no state -- DECLARE and CLASSIFY are decisions about the incident,
 #: not instructions to the market.
 ENGINE_ACTIONS: dict[str, ActionKind] = {
+    ActionType.PROTECT_SWITCH: ActionKind.PROTECT_SWITCH,
     ActionType.REDUCE_ONLY: ActionKind.REDUCE_ONLY,
     ActionType.PAUSE_LIQUIDATIONS: ActionKind.PAUSE_LIQUIDATIONS,
     ActionType.LIQ_THROTTLE: ActionKind.THROTTLE_LIQUIDATIONS,
@@ -396,6 +414,16 @@ def start_stepped_run(
         scenario, params, control_stack(controls_enabled), seed=effective_seed
     )
     return run
+
+
+DRILL_SECONDS = 3600
+"""The playbook runs T+0 to T+60 minutes."""
+
+
+def drill_clock(incident, engine: Engine) -> int:
+    """The playbook clock: the engine tick while the market event runs, then
+    whatever the operator has advanced it to."""
+    return max(incident.drill_clock_s, engine.tick)
 
 
 def elapsed_seconds(incident) -> float:

@@ -2,10 +2,17 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 /**
- * The live state of the market as the operator sees it. Phase 7 drives this
- * from the incident's engine flags; until then the kitchen sink drives it.
+ * The live state of the market as the operator sees it. Driven by the war room
+ * from the open incident's engine flags. A simulator replay must never drive
+ * it: a replay is not the live market.
  */
-export type SystemState = "NORMAL" | "REDUCE_ONLY" | "LIQ_PAUSED" | "HALTED" | "DEGRADED_ORACLE";
+export type SystemState =
+  | "NORMAL"
+  | "REDUCE_ONLY"
+  | "TRADING_PAUSED"
+  | "LIQ_PAUSED"
+  | "HALTED"
+  | "DEGRADED_ORACLE";
 
 interface AppState {
   railCollapsed: boolean;

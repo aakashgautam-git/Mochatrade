@@ -11,5 +11,6 @@ export { Sparkline } from "./Sparkline";
 export { DeltaChip, Stat, type StatDelta } from "./Stat";
 export { Timeline, type TimelineItem } from "./Timeline";
 export { toast, ToastRegion } from "./Toast";
+export { TextField } from "./TextField";
 export { Toggle } from "./Toggle";
 export { DOT, FG, TINT, type Tone } from "./tone";

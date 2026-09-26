@@ -31,7 +31,6 @@ export const NAV: NavSection[] = [
     path: "/war-room",
     label: "War Room",
     icon: Radar,
-    pending: { phase: 7, summary: "The 60-minute playbook as a live drill. Declare, throw the Protect Switch, and every decision changes the run and lands in an append-only log." },
   },
   {
     path: "/forensics",
