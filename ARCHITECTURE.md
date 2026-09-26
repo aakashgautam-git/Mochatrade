@@ -263,12 +263,13 @@ split. A full comparison is ~425 KB gzipped.
    720 seconds in the macro run and lets each reopen run 10s unchecked. An 8%
    participation removes the conflict (1 pause, 0 swings) at the cost of more
    liquidations and ADL. Not changed without approval: it is published policy.
-2. **The dynamic circuit breaker never fires.** Across all six scenarios it
-   fired zero times. Its bounds are (lookback low − variant, lookback high +
-   variant), so a steady crash that keeps making new lows never breaches. The
-   brief's "rolling 60-minute look-back high/low ± variant" more plausibly means
-   a falling market may not drop more than the variant below the lookback HIGH.
-   Fixing it changes every protected result, so it awaits a decision.
+2. **Resolved: the dynamic circuit breaker now fires.** Its bounds were
+   (lookback low − variant, lookback high + variant), so a steady crash dragged
+   its own floor down and never breached (zero fires in six scenarios). Bounds
+   are now (lookback HIGH − variant, lookback LOW + variant), the look-back
+   pauses during the breaker's own pause and restarts on resume. It fires in
+   5 of 6 scenarios; controls-on still beats controls-off everywhere; the
+   largest reopen wick in the protected macro run fell from 413 to 223 bps.
 
 ### Live engines
 

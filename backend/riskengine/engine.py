@@ -68,7 +68,8 @@ from .scenario import Scenario
 #: if it had that field. 2 = per-source oracle observations. 3 = pause reason
 #: and velocity escalation level. 4 = reopening call auction record.
 #: 5 = per-fill liquidation records and per-tick depth snapshots.
-FRAME_SCHEMA = 5
+#: 6 = circuit-breaker bounds fixed (behaviour change; forces re-warm).
+FRAME_SCHEMA = 6
 
 #: Depth snapshot shape: ten 10 bps buckets per side covers exactly the 1% band
 #: the throttle's participation cap is measured against, so the ladder shows the
@@ -314,6 +315,7 @@ class Engine:
         self.auction_absorbed = 0
         self._paused_prev = False
         self._pause_reason_prev: str | None = None
+        self._dcb_paused_prev = False
         self.max_divergence_bps = 0.0
         self.min_mark = math.inf
         self.min_reference = math.inf
@@ -437,7 +439,14 @@ class Engine:
                         f"{params.velocity_cooldown_seconds}s."
                     )
         if self.controls.dynamic_circuit_breaker:
-            if self.breaker.check(self.book.mid) and self.flags.dcb_paused_until is None:
+            # CME: the look-back restarts when trading resumes, and prices printed
+            # during the breaker's own pause do not count toward the next one.
+            if self._dcb_paused_prev and self.flags.dcb_paused_until is None:
+                self.breaker.restart()
+            self._dcb_paused_prev = self.flags.dcb_paused_until is not None
+            if self._dcb_paused_prev:
+                pass
+            elif self.breaker.check(self.book.mid):
                 self.flags.dcb_paused_until = tick + params.dcb_pause_ticks
                 self.breaker.restart()
                 self.flags.stage = ReopenStage.AUCTION
@@ -447,6 +456,7 @@ class Engine:
                     f"look-back. {params.dcb_pause_seconds}s pre-open auction; "
                     "look-back window restarts on resume."
                 )
+                self._dcb_paused_prev = True
             else:
                 self.breaker.push(self.book.mid)
 

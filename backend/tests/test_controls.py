@@ -51,10 +51,24 @@ def test_circuit_breaker_bands_track_the_rolling_lookback() -> None:
     for price in (100.0, 101.0, 99.0):
         cb.push(price)
     lower, upper = cb.bounds()  # type: ignore[misc]
-    assert lower == pytest.approx(99.0 * 0.975)
-    assert upper == pytest.approx(101.0 * 1.025)
-    assert cb.check(96.0)
+    assert lower == pytest.approx(101.0 * 0.975)  # the variant below the HIGH
+    assert upper == pytest.approx(99.0 * 1.025)  # the variant above the LOW
+    assert cb.check(98.0)
     assert not cb.check(100.0)
+
+
+def test_a_steady_crash_that_keeps_making_new_lows_still_breaches() -> None:
+    """The original bounds followed a falling market down and never fired."""
+    cb = CircuitBreaker(P, tier=1, offhours=False)
+    price, fired = 100.0, False
+    for _ in range(60):
+        if cb.check(price):
+            fired = True
+            break
+        cb.push(price)
+        price *= 0.998  # 0.2% a tick: never a single big gap
+    assert fired
+    assert price > 100.0 * (1 - 0.025) * 0.998 ** 2
 
 
 def test_circuit_breaker_needs_history_before_it_can_fire() -> None:

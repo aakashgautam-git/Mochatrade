@@ -229,11 +229,21 @@ class CircuitBreaker:
         return self.params.dcb_variant_pct(self.tier, offhours=self.offhours)
 
     def bounds(self) -> tuple[float, float] | None:
+        """The price may not fall more than the variant below the look-back HIGH,
+        nor rise more than the variant above the look-back LOW.
+
+        The first version anchored the other way round -- (low - variant,
+        high + variant) -- so a crash that kept making new lows dragged its own
+        floor down with it and never breached. It fired zero times in all six
+        scenarios. Anchoring to the opposite extreme caps the total range a
+        market can travel inside the look-back, which is what a circuit breaker
+        is for.
+        """
         if len(self._window) < 2:
             return None
         lo, hi = min(self._window), max(self._window)
         variant = self.variant_pct / 100.0
-        return lo * (1.0 - variant), hi * (1.0 + variant)
+        return hi * (1.0 - variant), lo * (1.0 + variant)
 
     def check(self, price: float) -> bool:
         """True if this price breaches the band. Call before pushing."""
