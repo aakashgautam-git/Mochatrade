@@ -10,7 +10,7 @@ taken from the research brief, and each rule says where it came from:
       verified solvency, say "market conditions".
     research 6, T+5 FIRST PUBLIC WORD: no cause, no blame, what we see, what we
       turned on, next update at HH:MM.
-    research 6, T+15: if it is C/D/E, say so. T+30: "N users, Rs X aggregate,
+    research 6, T+15: if it is C/D/E, say so. T+30: "N users, ₹X aggregate,
       between HH:MM-HH:MM IST", citing the APE policy that already existed.
       T+60: what happened, who is affected, what we are paying, when it lands,
       the date of the full RCA.
@@ -32,7 +32,8 @@ from typing import Any, Callable
 
 from django.utils import timezone
 
-from riskengine.classifier import LABELS, inr_text
+from riskengine.classifier import LABELS
+from riskengine.indian import inr_text
 
 BLOCK = "block"
 WARN = "warn"
@@ -98,6 +99,9 @@ class Facts:
     controls: str
     provisional_deadline: datetime | None
     solvency_note: str
+    mark_on_last_trade: bool = False
+    """Class C came from our market marking positions to the last traded
+    price, not from a bad oracle print: the classifier's LTP signal."""
 
 
 def _ist(dt: datetime) -> str:
@@ -112,13 +116,27 @@ def _at(facts: Facts, seconds: int) -> datetime:
     return facts.declared_at + timedelta(seconds=seconds)
 
 
-def next_update_seconds(drill_seconds: int) -> int:
+def next_update_seconds(drill_seconds: int, slot_minutes: int = 0) -> int:
     """The next public-update slot on the playbook clock after now; every 30
-    minutes once the first hour is over."""
+    minutes once the first hour is over.
+
+    `slot_minutes` is the slot the update being written fills. An update sent
+    ahead of its slot promises the one after it: the preliminary call sent at
+    T+14 fills T+15, so its next update is the number at T+30, not T+15.
+    """
+    after = max(drill_seconds, slot_minutes * 60)
     for minute in PLAYBOOK_UPDATES_MIN:
-        if minute * 60 > drill_seconds:
+        if minute * 60 > after:
             return minute * 60
-    return drill_seconds - drill_seconds % 1800 + 1800
+    return after - after % 1800 + 1800
+
+
+TEMPLATE_SLOT_MIN = {"first-word": 5, "preliminary": 15, "the-number": 30, "reopen": 45}
+"""The playbook slot each public template fills, research 6."""
+
+
+def next_update_for(template: str, drill_seconds: int) -> int:
+    return next_update_seconds(drill_seconds, TEMPLATE_SLOT_MIN.get(template, 0))
 
 
 # --------------------------------------------------------------------------
@@ -267,7 +285,8 @@ def lint(
     if public and template == "handover" and not DATE.search(text):
         out.append(Finding("rca-date", WARN, "Publish the date of the full RCA.", "Research 6, T+60", None))
     if public and facts.classified and facts.category in {"C", "D", "E"} and template in {"preliminary", "the-number", "handover"}:
-        if not re.search(r"\b(?:our|we)\b[^.]{0,60}\b(?:fault|error|outage|oracle|price feed|failure|mistake|app|api|systems?|side)\b", text, _I):
+        if not re.search(r"\b(?:our|we)\b[^.]{0,60}\b(?:fault|error|outage|oracle|price feed|failure|mistake|app|api|systems?|side)\b"
+                         r"|\b(?:is|was) ours\b|\bon us\b", text, _I):
             out.append(Finding("own-it", WARN,
                                f"This is class {facts.category}: {LABELS[facts.category].lower()}. Say it is ours.",
                                "Research 6, T+15", None))
@@ -278,7 +297,8 @@ def lint(
     if re.search(r"\binvestigating\b|\blooking into\b", text, _I) and not TIME.search(text) and not amounts:
         out.append(Finding("investigating-only", WARN,
                            "'We're investigating' is not an update: give a number or a deadline.", "Research 9, point 1", None))
-    if facts.classified and re.search(r"\bglitch\b|technical (?:issue|difficult)", text, _I):
+    # "Technical glitch" is the SEBI framework's own term, so a notice to the regulator may use it.
+    if facts.classified and audience != "REGULATOR" and re.search(r"\bglitch\b|technical (?:issue|difficult)", text, _I):
         out.append(Finding("vague-glitch", WARN,
                            "Say what failed: our price feed, our app and API, UPI settlement, or the venue.", "Research 6", None))
     for rule, pattern, message, source in WARN_RULES:
@@ -322,8 +342,8 @@ def _sign(f: Facts) -> str:
     return f" — {f.names[0]}" if f.names and f.names[0] else ""
 
 
-def _next(f: Facts) -> str:
-    return _ist(_at(f, next_update_seconds(f.drill_seconds)))
+def _next(f: Facts, template: str) -> str:
+    return _ist(_at(f, next_update_for(template, f.drill_seconds)))
 
 
 def _first_word(f: Facts, channel: str) -> tuple[str, str]:
@@ -331,34 +351,37 @@ def _first_word(f: Facts, channel: str) -> tuple[str, str]:
     if channel == "X":
         return (f"Abnormal price moves on {f.instrument}",
                 f"We see abnormal price moves on {f.instrument} since {since} IST. Turned on: {f.controls}. "
-                f"Next update at {_next(f)} IST.{_sign(f)}")
+                f"Next update at {_next(f, 'first-word')} IST.{_sign(f)}")
     return (f"Abnormal price moves on {f.instrument}",
             f"Since {since} IST we are seeing abnormal price moves on {f.instrument}. What we have turned on: {f.controls}. "
-            f"We have not confirmed a cause and we will not guess. Next update at {_next(f)} IST.{_sign(f)}")
+            f"We have not confirmed a cause and we will not guess. Next update at {_next(f, 'first-word')} IST.{_sign(f)}")
 
 
 def _preliminary(f: Facts, channel: str) -> tuple[str, str]:
     ours = f.classified and f.category in {"C", "D", "E"}
     what = {
-        "C": "our own price feed published a wrong price",
+        "C": (
+            "our market marked positions to the last traded price instead of our published reference price"
+            if f.mark_on_last_trade else "our own price feed published a wrong price"
+        ),
         "D": "our app and order API went down while prices moved",
         "E": "UPI deposits sent to us settled late, after positions were closed",
     }.get(f.category, "")
     if ours:
         body = (f"Preliminary finding: {what}. This one is ours, class {f.category} under our published Abnormal Price "
                 f"Event policy. Trades stand; affected users are compensated under that policy, without filing a ticket. "
-                f"Next update at {_next(f)} IST, with the number.{_sign(f)}")
+                f"Next update at {_next(f, 'preliminary')} IST, with the number.{_sign(f)}")
         if channel == "X":
             body = (f"Preliminary: {what}. That is on us (class {f.category}, our published APE policy). "
-                    f"Compensation follows, no ticket needed. Next update {_next(f)} IST.{_sign(f)}")
+                    f"Compensation follows, no ticket needed. Next update {_next(f, 'preliminary')} IST.{_sign(f)}")
         return ("Preliminary finding: the fault is ours", body)
     if f.classified:
         return (f"Update on {f.instrument}",
                 f"Preliminary finding: {LABELS[f.category].lower()}, not a fault on our side. We are publishing the "
-                f"evidence tape so anyone can check it. What stays on: {f.controls}. Next update at {_next(f)} IST.{_sign(f)}")
+                f"evidence tape so anyone can check it. What stays on: {f.controls}. Next update at {_next(f, 'preliminary')} IST.{_sign(f)}")
     return (f"Update on {f.instrument}",
             f"We are checking all three layers: the venue, our market and our own app and payments. What stays on: "
-            f"{f.controls}. Next update at {_next(f)} IST.{_sign(f)}")
+            f"{f.controls}. Next update at {_next(f, 'preliminary')} IST.{_sign(f)}")
 
 
 def _window(f: Facts) -> str:
@@ -371,25 +394,27 @@ def _the_number(f: Facts, channel: str) -> tuple[str, str]:
     if not f.claims_open:
         return (f"Update on {f.instrument}",
                 f"We are computing the affected set and each account's claim. We will publish the number once it is "
-                f"computed, not an estimate. Next update at {_next(f)} IST.{_sign(f)}")
+                f"computed, not an estimate. Next update at {_next(f, 'preliminary')} IST.{_sign(f)}")
     deadline = f" Provisional credit lands by {_ist(f.provisional_deadline)} IST, as locked trading credit." if f.provisional_deadline else ""
     cap = (f" Claims total {inr_text(f.total_claims)}, above our published per-incident cap of {inr_text(f.cap)}, so every "
            f"claim is paid {f.ratio:.1%} in cash and the rest as a non-cash make-good: pro-rata, announced as pro-rata."
            if f.pro_rata else "")
+    ours = f.category in {"C", "D", "E"}
     if channel == "X":
         return (f"{f.affected} users affected",
-                f"{f.affected} users, {inr_text(f.total_claims)} claimed{_window(f)}. Paid under our published Abnormal "
-                f"Price Event policy{', pro-rata above the cap' if f.pro_rata else ''}. Next update {_next(f)} IST.{_sign(f)}")
+                f"{f.affected} users, {inr_text(f.total_claims)} claimed{_window(f)}.{' That is on us.' if ours else ''} Paid under our published Abnormal "
+                f"Price Event policy{', pro-rata above the cap' if f.pro_rata else ''}. Next update {_next(f, 'the-number')} IST.{_sign(f)}")
     return (f"{f.affected} users affected, {inr_text(f.total_claims)} claimed",
-            f"{f.affected} users are affected, {inr_text(f.total_claims)} in aggregate{_window(f)}. Compensation follows our "
-            f"Abnormal Price Event policy, published before this happened.{deadline}{cap} Next update at {_next(f)} IST.{_sign(f)}")
+            f"{f.affected} users are affected, {inr_text(f.total_claims)} in aggregate{_window(f)}."
+            f"{' This one is ours.' if ours else ''} Compensation follows our "
+            f"Abnormal Price Event policy, published before this happened.{deadline}{cap} Next update at {_next(f, 'the-number')} IST.{_sign(f)}")
 
 
 def _reopen(f: Facts, channel: str) -> tuple[str, str]:
     return (f"Reopening {f.instrument} in stages",
             f"We are reopening {f.instrument} in stages: reduce-only, then post-only, then full trading, each gate only "
             f"after prices have been healthy for five minutes. Trading resumes through a short auction, never straight into "
-            f"continuous trading. Next update at {_next(f)} IST.{_sign(f)}")
+            f"continuous trading. Next update at {_next(f, 'reopen')} IST.{_sign(f)}")
 
 
 def _handover(f: Facts, channel: str) -> tuple[str, str]:

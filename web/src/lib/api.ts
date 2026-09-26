@@ -21,7 +21,6 @@ import type {
   DeclareIncidentRequest,
   Incident,
   IncidentState,
-  MoneyString,
   RiskPolicy,
   ScenarioListItem,
   StepResponse,
@@ -76,18 +75,7 @@ export const fetchScenarios = () => get<ScenarioListItem[]>("/api/scenarios/");
 export const fetchComparison = (slug: string) =>
   get<Comparison>(`/api/compare/${slug}/`);
 
-/** For DISPLAY only. Do arithmetic on the string's decimal value server-side. */
-export function parseMoney(value: MoneyString): number {
-  return Number.parseFloat(value);
-}
-
-/** Indian-scale money. A judge reads lakh and crore, not millions. */
-export function rupees(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_00_00_000) return `₹${(value / 1_00_00_000).toFixed(2)} Cr`;
-  if (abs >= 1_00_000) return `₹${(value / 1_00_000).toFixed(1)} L`;
-  return `₹${Math.round(value).toLocaleString("en-IN")}`;
-}
+export { parseMoney, rupees } from "./money";
 
 // ---------------------------------------------------------------------------
 // Incidents: the war room

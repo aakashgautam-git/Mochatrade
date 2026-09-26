@@ -2,6 +2,7 @@ import { useId } from "react";
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { ChartLegend } from "./ChartLegend";
+import { rupees } from "../../lib/api";
 import { ChartTooltip } from "./ChartTooltip";
 import { axisTick, minuteTicks, useChartTheme } from "./useChartTheme";
 
@@ -61,11 +62,13 @@ export function CascadeChart({ data, cursor, height = 220 }: { data: CascadePoin
               tickLine={false}
               axisLine={false}
               width={56}
+              // At least a lakh tall, so an empty cascade does not print 0.0L four times.
+              domain={[0, (max: number) => Math.max(max, 1_00_000)]}
               tickFormatter={(v: number) => (v === 0 ? "0" : `${(v / 1_00_000).toFixed(1)}L`)}
             />
             <Tooltip
               cursor={{ stroke: theme.line }}
-              content={<ChartTooltip theme={theme} format={(v) => `₹${(v / 1_00_000).toFixed(2)}L`} />}
+              content={<ChartTooltip theme={theme} format={rupees} />}
             />
             {cursor !== undefined ? (
               <ReferenceLine x={cursor} stroke={theme.textDim} strokeDasharray="4 4" isFront />

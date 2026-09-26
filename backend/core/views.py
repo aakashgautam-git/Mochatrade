@@ -391,25 +391,15 @@ class IncidentCreateView(APIView):
         if isinstance(row, Response):
             return row
 
-        with transaction.atomic():
-            incident = Incident.objects.create(
-                severity=data["severity"],
-                incident_commander=data["incident_commander"],
-                ops_lead=data["ops_lead"],
-                comms_lead=data["comms_lead"],
-            )
-            incident.run = runner.start_stepped_run(
-                incident, row, controls_enabled=data["controls_enabled"], seed=data.get("seed")
-            )
-            incident.save(update_fields=["run"])
-            IncidentAction.objects.create(
-                incident=incident,
-                tick=0,
-                actor=data["incident_commander"] or "IC",
-                action_type=ActionType.DECLARE,
-                rationale="SEV-1 declared. Roles assumed as pre-assigned.",
-            )
-
+        incident = runner.declare_incident(
+            row,
+            controls_enabled=data["controls_enabled"],
+            seed=data.get("seed"),
+            severity=data["severity"],
+            incident_commander=data["incident_commander"],
+            ops_lead=data["ops_lead"],
+            comms_lead=data["comms_lead"],
+        )
         return Response(_state_payload(incident), status=status.HTTP_201_CREATED)
 
 
@@ -844,14 +834,21 @@ def _blocked(findings) -> Response:
 
 
 def _log_publish(incident, engine, update: CommsUpdate, actor: str) -> None:
+    """Log a publish, and while the market runs hand it to the live engine as
+    well: a rebuild replays every PUBLISH_UPDATE in the log, so an entry the
+    live engine never saw would make the rebuilt run differ from the stored one."""
+    live = not engine.finished
+    tick = engine.tick if live else runner.drill_clock(incident, engine)
     IncidentAction.objects.create(
         incident=incident,
-        tick=engine.tick if not engine.finished else runner.drill_clock(incident, engine),
+        tick=tick,
         actor=actor,
         action_type=ActionType.PUBLISH_UPDATE,
         params={"channel": update.channel, "sequence": update.sequence, "audience": update.audience},
         rationale=update.headline,
     )
+    if live:
+        engine.queue_action(OperatorAction(tick=tick, kind=runner.ENGINE_ACTIONS[ActionType.PUBLISH_UPDATE]))
 
 
 class IncidentCommsView(APIView):

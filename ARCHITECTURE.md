@@ -73,7 +73,16 @@ invent a risk parameter. If a parameter is missing, ask — do not guess.
 > the 60-minute clock, the judgment calls, the don'ts, the India layer, and the
 > seven-precedent case file with the OKX and CFTC/FIA templates.
 >
-> **NEXT: PHASE 12 — Seed data and polish.**
+> **PHASE 12 — SEED DATA AND POLISH (complete).** `make seed` ends with
+> `seed_demo`: three drills run end to end on the live engine through the
+> real API (`core/demo.py`), so every page opens on engine data. A class G
+> manipulation and a class D outage, both resolved, and the macro cascade with
+> the controls off, class C above the cap and pro-rata, in flight at T+40 with
+> the reopen update waiting for the IC. Each drill is declared at its
+> scenario's labelled time and every stamp sits on its own drill clock. Money
+> is Indian-format everywhere through one helper (`riskengine/indian.py`).
+>
+> **NEXT: PHASE 13 — Final pass: production build, click-through, docs.**
 >
 > **PHASE 5 — DESIGN SYSTEM AND SHELL (complete).** Primitives in
 > `web/src/components/ui/`, themed chart wrappers in `components/charts/`, the
@@ -103,7 +112,8 @@ trustworthy engine more than it needs a database.
 | 9 | Remediation — claims, make-whole, pro-rata cap overflow | Done |
 | 10 | Comms | Done |
 | 11 | Incident report | **Done** |
-| 12 | Seed data + polish | **Next** |
+| 12 | Seed data + polish | **Done** |
+| 13 | Final pass — production build, click-through, docs | **Next** |
 
 Every phase updates this marker and ends in a commit. Do not start the next
 phase without being asked.

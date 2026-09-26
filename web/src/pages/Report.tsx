@@ -8,7 +8,7 @@ import { fetchReport, parseMoney, rupees } from "../lib/api";
 import { CLASS_NAME, isRemedyClass } from "../lib/forensics";
 import { INDIA, POLICY_TEMPLATES, PRECEDENTS, PRECEDENTS_FOR, REMEDY_MATRIX, WHY_TRADES_STAND } from "../lib/research";
 import type { IncidentReport, RemedyClass } from "../lib/types";
-import { formatClock, istAt } from "../lib/warroom";
+import { actionLabel, formatClock, istAt } from "../lib/warroom";
 
 const inr = (value: number) => rupees(Math.abs(value) < 0.5 ? 0 : value);
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" });
@@ -164,7 +164,7 @@ function Document({ r }: { r: IncidentReport }) {
             <li key={a.id} className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-4 text-sm">
               <span className="num text-text-dim">{formatClock(a.tick)}<br />{istAt(inc.declared_at, a.tick)} IST</span>
               <span>
-                <span className="font-medium">{a.action_type_display}</span> <span className="text-text-dim">· {a.actor}</span>
+                <span className="font-medium">{actionLabel(a)}</span> <span className="text-text-dim">· {a.actor}</span>
                 {a.rationale ? <span className="block text-text-dim">{a.rationale}</span> : null}
               </span>
             </li>

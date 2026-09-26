@@ -320,7 +320,7 @@ class Scenario:
 
     assumed_scale_note: str = (
         "Modelled at a platform scale of ~1,200 concurrently exposed accounts "
-        "holding roughly Rs 38 Cr of open interest against roughly Rs 5.7 Cr of "
+        "holding roughly ₹38 Cr of open interest against roughly ₹5.7 Cr of "
         "posted capital, at an average of 16.8x. The book is sized to a "
         "mid-stage Indian retail broker, not to MochaTrade's present size. "
         "Damage figures scale with it; the control deltas do not."

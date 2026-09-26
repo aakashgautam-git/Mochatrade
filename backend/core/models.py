@@ -22,12 +22,14 @@ exposure -- use DecimalField, because those are money.
 from __future__ import annotations
 
 from dataclasses import fields as dataclass_fields
+from datetime import datetime
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from riskengine.indian import inr_text
 from riskengine.params import (
     DEFAULT_PARAMS,
     FIELD_SOURCES,
@@ -235,8 +237,8 @@ class PolicyMarginTier(models.Model):
         unique_together = (("policy", "ordering"),)
 
     def __str__(self) -> str:
-        ceiling = f"{self.notional_ceiling:,.0f}" if self.notional_ceiling else "unbounded"
-        return f"<= Rs {ceiling}: {self.max_leverage:g}x, MM {self.mm_pct:g}%"
+        ceiling = inr_text(self.notional_ceiling) if self.notional_ceiling else "unbounded"
+        return f"<= {ceiling}: {self.max_leverage:g}x, MM {self.mm_pct:g}%"
 
     def clean(self) -> None:
         if self.notional_ceiling is not None and self.notional_ceiling <= self.notional_floor:
@@ -868,13 +870,13 @@ class Incident(models.Model):
 
     def save(self, *args: object, **kwargs: object) -> None:
         if not self.code:
-            self.code = self._next_code()
+            self.code = self._next_code(self.declared_at)
         super().save(*args, **kwargs)  # type: ignore[arg-type]
 
     @staticmethod
-    def _next_code() -> str:
-        """INC-YYYYMMDD-NN, sequential within the IST day."""
-        today = timezone.localtime(timezone.now()).date()
+    def _next_code(declared_at: datetime | None = None) -> str:
+        """INC-YYYYMMDD-NN, sequential within the IST day it was declared."""
+        today = timezone.localtime(declared_at or timezone.now()).date()
         prefix = f"INC-{today:%Y%m%d}-"
         last = (
             Incident.objects.filter(code__startswith=prefix)

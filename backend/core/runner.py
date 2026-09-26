@@ -39,6 +39,7 @@ from django.utils import timezone
 
 from riskengine import classifier, remediation
 from riskengine.controls import ActionKind, ControlStack, OperatorAction
+from riskengine.indian import inr_text
 from riskengine.engine import FRAME_SCHEMA, Engine
 from riskengine.scenario import Scenario as EngineScenario
 from riskengine.scenario import by_key
@@ -441,6 +442,43 @@ def start_stepped_run(
     return run
 
 
+def declare_incident(
+    row: Scenario,
+    *,
+    controls_enabled: bool,
+    seed: int | None = None,
+    severity: str = "SEV1",
+    incident_commander: str = "",
+    ops_lead: str = "",
+    comms_lead: str = "",
+    declared_at: datetime | None = None,
+) -> Incident:
+    """Open the record at T+0: the incident, its stepped run at tick zero, and
+    the DECLARE entry in the log. `declared_at` defaults to now; the demo seed
+    passes the time its drill began, so every time derived from it (the next
+    update, the provisional-credit deadline, the SEBI dates) is the drill's."""
+    at = declared_at or timezone.now()
+    with transaction.atomic():
+        incident = Incident.objects.create(
+            severity=severity,
+            declared_at=at,
+            incident_commander=incident_commander,
+            ops_lead=ops_lead,
+            comms_lead=comms_lead,
+        )
+        incident.run = start_stepped_run(incident, row, controls_enabled=controls_enabled, seed=seed)
+        incident.save(update_fields=["run"])
+        IncidentAction.objects.create(
+            incident=incident,
+            tick=0,
+            wall_clock=at,
+            actor=incident_commander or "IC",
+            action_type=ActionType.DECLARE,
+            rationale="SEV-1 declared. Roles assumed as pre-assigned.",
+        )
+    return incident
+
+
 DRILL_SECONDS = 3600
 """The playbook runs T+0 to T+60 minutes."""
 
@@ -726,8 +764,8 @@ def open_claims(incident, engine: Engine, *, actor: str, rationale: str):
                 "ratio": round(plan.ratio, 4),
             },
             rationale=rationale or (
-                f"Claims opened: {classifier.inr_text(plan.total_claims)} claimed, {classifier.inr_text(plan.payable)} payable"
-                + (f", pro-rata at {plan.ratio:.1%} above the {classifier.inr_text(plan.cap)} cap." if plan.pro_rata else ", every claim in full.")
+                f"Claims opened: {inr_text(plan.total_claims)} claimed, {inr_text(plan.payable)} payable"
+                + (f", pro-rata at {plan.ratio:.1%} above the {inr_text(plan.cap)} cap." if plan.pro_rata else ", every claim in full.")
             ),
             reversible=True,
         )
@@ -815,11 +853,11 @@ def recalibrate_reserve(*, actor: str) -> dict[str, Any]:
             version=version,
             notes=(
                 f"Recalibrated from simulation by {actor} on "
-                f"{timezone.localtime():%d %b %Y %H:%M} IST. Worst modelled loss: {classifier.inr_text(worst_loss)} "
+                f"{timezone.localtime():%d %b %Y %H:%M} IST. Worst modelled loss: {inr_text(worst_loss)} "
                 f"({worst['name']}, controls {'on' if worst['controls_enabled'] else 'off'}) across "
                 f"{len(table)} seeded runs under {policy.version}. Reserve set to "
-                f"{params.reserve_target_multiple_of_worst_loss:g}x that: {classifier.inr_text(target)} "
-                f"(was {classifier.inr_text(previous)}). Per-incident cap unchanged at {classifier.inr_text(params.per_incident_cap_inr)}."
+                f"{params.reserve_target_multiple_of_worst_loss:g}x that: {inr_text(target)} "
+                f"(was {inr_text(previous)}). Per-incident cap unchanged at {inr_text(params.per_incident_cap_inr)}."
             ),
             incident_reserve_opening_inr=target,
         )
@@ -879,6 +917,7 @@ def comms_facts(incident, engine: Engine):
     from . import comms
 
     detail = incident.classification_detail or {}
+    signals = detail.get("signals") or {}
     plan = (incident.remediation_detail or {}).get("waterfall") or {}
     window = incident.claims.filter(category__in=sorted(LIABLE)).select_related("account")
     ticks = [c.account.liquidated_at_tick for c in window if c.account.liquidated_at_tick is not None]
@@ -905,4 +944,5 @@ def comms_facts(incident, engine: Engine):
         controls=_controls_on(incident, engine),
         provisional_deadline=datetime.fromisoformat(deadline) if deadline else None,
         solvency_note="",
+        mark_on_last_trade=bool(signals.get("ltp_marked_liquidations")) and not signals.get("composite_defect"),
     )

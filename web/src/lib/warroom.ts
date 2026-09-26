@@ -71,13 +71,30 @@ export interface StepStatus {
   doneAt: number | null;
 }
 
+/**
+ * Public updates, one per number: the same update sent to the status page, X
+ * and WhatsApp is one update on three channels, not three updates. A message
+ * to a regulator, the venue or affected users is not a public update.
+ */
+export function publicUpdates(actions: readonly IncidentAction[]): IncidentAction[] {
+  const seen = new Set<string>();
+  const out: IncidentAction[] = [];
+  for (const a of actions) {
+    if (a.action_type !== "PUBLISH_UPDATE" || (a.params["audience"] ?? "PUBLIC") !== "PUBLIC") continue;
+    const sequence = a.params["sequence"];
+    const key = typeof sequence === "number" ? `seq-${sequence}` : `id-${a.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
 export function stepStatus(step: PlaybookStep, actions: readonly IncidentAction[], clock: number): StepStatus {
   let doneAt: number | null = null;
+  const updates = publicUpdates(actions);
   for (const rule of step.completes) {
-    // A message to a regulator or the venue is not a public update.
-    const hits = actions.filter(
-      (a) => a.action_type === rule.type && (rule.type !== "PUBLISH_UPDATE" || (a.params["audience"] ?? "PUBLIC") === "PUBLIC"),
-    );
+    const hits = rule.type === "PUBLISH_UPDATE" ? updates : actions.filter((a) => a.action_type === rule.type);
     const needed = rule.count ?? 1;
     const hit = hits[needed - 1];
     if (hit && (doneAt === null || hit.tick < doneAt)) doneAt = hit.tick;
@@ -109,6 +126,26 @@ export function pillFor(tick: Tick | null | undefined): PillState {
   if (tick.liquidations_paused) return "LIQ_PAUSED";
   if (tick.reduce_only) return "REDUCE_ONLY";
   return "NORMAL";
+}
+
+const CHANNEL: Record<string, string> = {
+  STATUS_PAGE: "status page", X: "X", WHATSAPP: "WhatsApp", TELEGRAM: "Telegram", EMAIL: "email",
+};
+const AUDIENCE: Record<string, string> = { AFFECTED: "Affected users", VENUE: "The venue", REGULATOR: "Regulators" };
+
+/**
+ * A log entry's label. A publish is named by what went out -- "Update 2 on X",
+ * "Regulators by email" -- rather than by its type's playbook slot, which
+ * reads "T+5" on an update sent at T+30.
+ */
+export function actionLabel(a: IncidentAction): string {
+  if (a.action_type !== "PUBLISH_UPDATE") return a.action_type_display;
+  const channel = CHANNEL[String(a.params["channel"] ?? "")];
+  const audience = String(a.params["audience"] ?? "PUBLIC");
+  const sequence = a.params["sequence"];
+  if (audience !== "PUBLIC") return `${AUDIENCE[audience] ?? audience}${channel ? ` by ${channel}` : ""}`;
+  if (typeof sequence !== "number") return "Public update";
+  return `Update ${sequence}${channel ? ` on ${channel}` : ""}`;
 }
 
 /** "T+04:12" on the drill clock. */

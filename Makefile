@@ -45,10 +45,11 @@ web: ## Run the Vite dev server only
 migrate: ## Apply migrations
 	cd backend && .venv/bin/python manage.py migrate
 
-seed: ## Seed the policy and scenarios, then pre-run every scenario both ways
+seed: ## Seed the policy and scenarios, pre-run every scenario both ways, then the demo drills
 	cd backend && .venv/bin/python manage.py seed_policy
 	cd backend && .venv/bin/python manage.py seed_scenarios
 	cd backend && .venv/bin/python manage.py warm_runs
+	cd backend && .venv/bin/python manage.py seed_demo
 
 test: ## Run the full pytest suite
 	cd backend && .venv/bin/pytest

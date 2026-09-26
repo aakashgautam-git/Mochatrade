@@ -266,7 +266,7 @@ def test_scenarios_are_read_from_the_database(api, seeded) -> None:
     body = api.get("/api/scenarios/").json()
     assert len(body) == 6
     detail = api.get("/api/scenarios/macro_cascade/").json()
-    assert "Rs 38 Cr" in detail["assumed_scale_note"]
+    assert "₹38 Cr" in detail["assumed_scale_note"]
     assert detail["instrument"]["symbol"] == "BTC-PERP"
     assert api.get("/api/scenarios/nope/").status_code == 404
 

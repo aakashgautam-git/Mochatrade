@@ -84,6 +84,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Iterable, Mapping, Sequence
 
 from .engine import Frame
+from .indian import group, inr_text  # noqa: F401  (inr_text is re-exported)
 from .liquidation import Account, LiquidationEvent, LiquidationStage, Side
 from .params import TICK_SECONDS, RiskParams
 from .scenario import Layer, Scenario
@@ -134,28 +135,6 @@ venues printing the same wrong price at once is somebody trading them there."""
 def clock(tick: int) -> str:
     seconds = int(round(tick * TICK_SECONDS))
     return f"T+{seconds // 60:02d}:{seconds % 60:02d}"
-
-
-def inr_text(value: float) -> str:
-    """Money in a sentence a user reads: crore and lakh, Indian digit grouping,
-    never millions."""
-    v = abs(value)
-    sign = "-" if value < 0 and v >= 0.5 else ""
-    if v >= 1e7:
-        return f"{sign}₹{v / 1e7:.2f} Cr"
-    if v >= 1e5:
-        return f"{sign}₹{v / 1e5:.2f} L"
-    digits = f"{v:.0f}"
-    if len(digits) > 3:
-        head, tail = digits[:-3], digits[-3:]
-        groups: list[str] = []
-        while len(head) > 2:
-            groups.insert(0, head[-2:])
-            head = head[:-2]
-        if head:
-            groups.insert(0, head)
-        digits = ",".join([*groups, tail])
-    return f"{sign}₹{digits}"
 
 
 def _bps(price: float | None, reference: float | None) -> float:
@@ -558,9 +537,9 @@ def _classify_account(
     c3 = Criterion(
         passed=decisive.survived_at_reference, value=None, threshold=0.0,
         detail=(
-            f"Held enough margin to survive at the Reference Composite ({ref:,.2f})"
+            f"Held enough margin to survive at the Reference Composite ({group(ref, 2)})"
             if decisive.survived_at_reference else
-            f"Would have breached maintenance at the Reference Composite ({ref:,.2f}) as well"
+            f"Would have breached maintenance at the Reference Composite ({group(ref, 2)}) as well"
         ),
     )
     ape = bool(c1.passed and c2.passed and c3.passed)

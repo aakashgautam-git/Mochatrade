@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Camera,
   CircleCheck,
@@ -55,7 +55,7 @@ import {
 } from "../lib/api";
 import { auctionMarkers, controlRegions, liquidationBursts, priceSeries } from "../lib/sim";
 import type { ActionType, IncidentState, Tick, TriageLayer, TriageStatus } from "../lib/types";
-import { formatClock, istAt, phaseAt, pillFor, playbookStatus, type Role, type StepState } from "../lib/warroom";
+import { actionLabel, formatClock, istAt, phaseAt, pillFor, playbookStatus, publicUpdates, type Role, type StepState } from "../lib/warroom";
 
 const ROLE_BLURB: Record<Role, string> = {
   IC: "Incident Commander. Owns the decisions and the clock. Does not touch a keyboard.",
@@ -66,12 +66,15 @@ const ROLE_BLURB: Record<Role, string> = {
 export function WarRoom() {
   const code = useApp((s) => s.incidentCode);
   const setCode = useApp((s) => s.setIncidentCode);
-  const setSystemState = useApp((s) => s.setSystemState);
+  const queryClient = useQueryClient();
 
+  // Leaving the room hands the pill back to the live market: the newest open
+  // incident, which may be a different one, or none.
   const close = useCallback(() => {
     setCode(null);
-    setSystemState("NORMAL");
-  }, [setCode, setSystemState]);
+    void queryClient.invalidateQueries({ queryKey: ["incidents"] });
+    void queryClient.invalidateQueries({ queryKey: ["incident-state"] });
+  }, [setCode, queryClient]);
 
   return code ? <IncidentRoom code={code} onClose={close} /> : <DeclarePanel onOpen={setCode} />;
 }
@@ -335,9 +338,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
     steps.find((s) => s.state === "overdue") ??
     steps.find((s) => s.state === "due") ??
     steps.find((s) => s.state === "upcoming");
-  const updates = state.actions.filter(
-    (a) => a.action_type === "PUBLISH_UPDATE" && (a.params["audience"] ?? "PUBLIC") === "PUBLIC",
-  ).length;
+  const updates = publicUpdates(state.actions).length;
 
   const act = async (type: ActionType, params: Record<string, unknown> = {}) => {
     setConfirm(null);
@@ -448,7 +449,7 @@ function IncidentRoom({ code, onClose }: { code: string; onClose: () => void }) 
     time: formatClock(a.tick),
     wall: `${istAt(state.incident.declared_at, a.tick)} IST`,
     actor: a.actor,
-    action: a.action_type_display,
+    action: actionLabel(a),
     rationale: a.rationale,
     irreversible: !a.reversible,
     tone: a.action_type === "DECLARE" ? "neg" : a.action_type === "PUBLISH_UPDATE" ? "pos" : "accent",

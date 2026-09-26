@@ -120,3 +120,38 @@ def test_next_update_follows_the_playbook_clock() -> None:
     assert comms.next_update_seconds(0) == 300
     assert comms.next_update_seconds(400) == 900
     assert comms.next_update_seconds(3600) == 5400
+
+
+def test_an_update_sent_early_promises_the_slot_after_its_own() -> None:
+    # The preliminary call fills T+15; sent at T+14 its next update is the number at T+30.
+    assert comms.next_update_for("preliminary", 14 * 60) == 30 * 60
+    assert comms.next_update_for("first-word", 4 * 60) == 15 * 60
+    assert comms.next_update_for("the-number", 28 * 60) == 45 * 60
+    headline, body = comms.TEMPLATE_BY_KEY["preliminary"].render(replace(QUANTIFIED, drill_seconds=14 * 60), "STATUS_PAGE")
+    assert "Next update at 04:00 IST" in body  # T0 is 03:30 IST; T+30
+
+
+def test_a_last_trade_mark_is_named_as_such() -> None:
+    _, body = comms.TEMPLATE_BY_KEY["preliminary"].render(replace(QUANTIFIED, mark_on_last_trade=True), "STATUS_PAGE")
+    assert "last traded price" in body
+    _, body = comms.TEMPLATE_BY_KEY["preliminary"].render(QUANTIFIED, "STATUS_PAGE")
+    assert "price feed published a wrong price" in body
+
+
+@pytest.mark.parametrize("category", ["C", "D"])
+def test_our_own_templates_own_our_faults_without_a_warning(category) -> None:
+    facts = replace(QUANTIFIED, category=category, mark_on_last_trade=category == "C")
+    for key in ("preliminary", "the-number"):
+        for channel in ("STATUS_PAGE", "X"):
+            headline, body = comms.TEMPLATE_BY_KEY[key].render(facts, channel)
+            found = {f.rule for f in lint(headline, body, channel=channel, audience="PUBLIC", template=key, facts=facts,
+                                          solvency_verified=False, has_next_update_at=False)}
+            assert "own-it" not in found, (key, channel, body)
+
+
+def test_the_regulator_may_use_its_own_word_for_a_glitch() -> None:
+    headline, body = comms.TEMPLATE_BY_KEY["sebi-glitch-notice"].render(QUANTIFIED, "EMAIL")
+    found = {f.rule for f in lint(headline, body, channel="EMAIL", audience="REGULATOR", template="sebi-glitch-notice",
+                                  facts=QUANTIFIED, solvency_verified=False, has_next_update_at=False)}
+    assert "vague-glitch" not in found
+    assert "vague-glitch" in rules("A technical glitch hit prices." + OK_TAIL, QUANTIFIED)

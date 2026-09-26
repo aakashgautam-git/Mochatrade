@@ -63,7 +63,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Mapping, Sequence
 
-from .classifier import AccountVerdict, Classification, inr_text
+from .classifier import AccountVerdict, Classification
+from .indian import inr_text
 from .engine import Frame
 from .liquidation import Account, LiquidationEvent
 from .params import RiskParams

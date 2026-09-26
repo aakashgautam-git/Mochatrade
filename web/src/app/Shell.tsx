@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Moon, PanelLeftClose, PanelLeftOpen, Palette, Sun } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -5,6 +6,8 @@ import { Badge } from "../components/ui/Badge";
 import { cn } from "../components/ui/cn";
 import { ToastRegion } from "../components/ui/Toast";
 import { useNow } from "../hooks/useNow";
+import { incidentState, listIncidents } from "../lib/api";
+import { pillFor } from "../lib/warroom";
 import { NAV, type NavSection } from "./nav";
 import { Link, usePathname } from "./router";
 import { useApp } from "./store";
@@ -194,6 +197,33 @@ function useDocumentTheme(isDocument: boolean, preview: boolean) {
   }, [isDocument, light, preview]);
 }
 
+/**
+ * The pill is the live market: the newest open incident's engine. The war room
+ * drives it while an incident is open in the room, and the kitchen sink previews
+ * states, so both are left alone. Everywhere else the pill reads the live
+ * incident, so a page never says NORMAL while trading is reduce-only. A
+ * simulator replay is never the live market and never sets it.
+ */
+function useLiveMarketPill() {
+  const pathname = usePathname();
+  const setSystemState = useApp((s) => s.setSystemState);
+  const inRoom = useApp((s) => s.incidentCode !== null);
+  const owned = (pathname === "/war-room" && inRoom) || pathname === "/kitchen-sink";
+  const incidents = useQuery({ queryKey: ["incidents"], queryFn: listIncidents, enabled: !owned });
+  const live = incidents.data?.find((i) => i.status !== "RESOLVED" && i.scenario_slug);
+  const state = useQuery({
+    queryKey: ["incident-state", live?.code],
+    queryFn: () => incidentState(live?.code ?? ""),
+    enabled: !owned && Boolean(live),
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    if (owned || !incidents.data) return;
+    if (!live) setSystemState("NORMAL");
+    else if (state.data) setSystemState(state.data.incident.status === "RESOLVED" ? "NORMAL" : pillFor(state.data.snapshot));
+  }, [owned, incidents.data, live, state.data, setSystemState]);
+}
+
 export function Shell({
   current,
   title,
@@ -208,6 +238,7 @@ export function Shell({
   children: ReactNode;
 }) {
   useDocumentTheme(isDocument, previewTheme);
+  useLiveMarketPill();
   return (
     <div className="min-h-screen bg-bg text-text">
       <a href="#main" className="skip-link">Skip to content</a>

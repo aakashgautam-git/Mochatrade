@@ -19,6 +19,7 @@ from django.http import HttpRequest
 from django.utils import timezone
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
+from riskengine.indian import inr_text
 
 from .models import (
     Claim,
@@ -56,12 +57,7 @@ def _chip(label: str, colour: str) -> str:
 
 def _rupees(amount) -> str:
     """Indian-scale money reads in lakh and crore, not in millions."""
-    value = float(amount or 0)
-    if abs(value) >= 1_00_00_000:
-        return f"Rs {value / 1_00_00_000:,.2f} Cr"
-    if abs(value) >= 1_00_000:
-        return f"Rs {value / 1_00_000:,.2f} L"
-    return f"Rs {value:,.0f}"
+    return inr_text(float(amount or 0))
 
 
 # --------------------------------------------------------------------------

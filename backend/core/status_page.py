@@ -12,7 +12,7 @@ from typing import Any
 
 from django.utils import timezone
 
-from riskengine.classifier import inr_text
+from riskengine.indian import inr_text
 
 OPERATIONAL = "operational"
 DEGRADED = "degraded"

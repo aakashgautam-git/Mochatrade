@@ -42,6 +42,7 @@ from .controls import (
     VelocityMonitor,
     apply_action,
 )
+from .indian import group
 from .liquidation import (
     Account,
     AccountState,
@@ -69,7 +70,8 @@ from .scenario import Scenario
 #: and velocity escalation level. 4 = reopening call auction record.
 #: 5 = per-fill liquidation records and per-tick depth snapshots.
 #: 6 = circuit-breaker bounds fixed (behaviour change; forces re-warm).
-FRAME_SCHEMA = 6
+#: 7 = log lines print prices with Indian digit grouping.
+FRAME_SCHEMA = 7
 
 #: Depth snapshot shape: ten 10 bps buckets per side covers exactly the 1% band
 #: the throttle's participation cap is measured against, so the ladder shows the
@@ -536,8 +538,8 @@ class Engine:
                 side = "sellers" if auction.imbalance_qty < 0 else "buyers"
                 lines.append(
                     f"Reopened through a call auction after the {auction.reason.replace('_', ' ')} "
-                    f"pause: cleared at {auction.clearing_price:,.2f} inside a "
-                    f"{auction.collar_lo:,.0f}-{auction.collar_hi:,.0f} collar, "
+                    f"pause: cleared at {group(auction.clearing_price, 2)} inside a "
+                    f"{group(auction.collar_lo)}-{group(auction.collar_hi)} collar, "
                     f"{auction.liquidations_absorbed} of {auction.liquidations_queued} "
                     f"queued liquidations absorbed"
                     + (f", unmatched {side} carried into continuous trading."
@@ -598,7 +600,7 @@ class Engine:
             settled += 1
         lines.append(
             f"[operator] haltTrading settled {settled} open positions at "
-            f"{mark:,.2f}. Nobody chose that price."
+            f"{group(mark, 2)}. Nobody chose that price."
         )
 
     def _emit(

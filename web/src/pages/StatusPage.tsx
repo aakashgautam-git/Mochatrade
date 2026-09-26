@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import { Skeleton } from "../components/ui";
 import { fetchPublicStatus } from "../lib/api";
+import { groupUpdates } from "../lib/status";
 import type { ComponentState, PublicIncident, PublicStatusResponse } from "../lib/types";
 
 const TONE: Record<ComponentState, { text: string; panel: string; Icon: typeof CheckCircle2 }> = {
@@ -131,7 +132,7 @@ function Body({ data }: { data: PublicStatusResponse }) {
 }
 
 function IncidentBlock({ i }: { i: PublicIncident }) {
-  const ordered = [...i.updates].sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
+  const ordered = groupUpdates(i.updates);
   return (
     <article className="rounded-card border border-line bg-surface px-5 py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -142,9 +143,9 @@ function IncidentBlock({ i }: { i: PublicIncident }) {
         </p>
       </div>
       <ol className="mt-4 space-y-4 border-l border-line pl-4">
-        {ordered.map((u) => (
-          <li key={`${u.sequence}-${u.channel}`}>
-            <p className="num text-xs text-text-dim">{ist(u.published_at)} IST · {u.channel_display}</p>
+        {ordered.map(({ update: u, channels }) => (
+          <li key={u.sequence}>
+            <p className="num text-xs text-text-dim">{ist(u.published_at)} IST · {channels.join(", ")}</p>
             <p className="mt-0.5 text-sm font-medium">{u.headline}</p>
             <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-text-dim">{u.body}</p>
             {u.next_update_at ? <p className="num mt-1 text-xs text-text-dim">Next update by {ist(u.next_update_at)} IST</p> : null}
